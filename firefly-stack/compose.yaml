@@ -1,0 +1,66 @@
+# Fincore: Firefly III stack for Dockge
+# Paste this as a new stack in Dockge. Values come from the stack .env in the same directory.
+# Bring up firefly-db + firefly-iii first, create a Personal Access Token in the Firefly UI,
+# put it in FIREFLY_III_ACCESS_TOKEN, then (re)start firefly-importer. See README.md.
+
+services:
+  firefly-db:
+    image: mariadb:11
+    container_name: fincore-firefly-db
+    environment:
+      - MYSQL_DATABASE=${DB_DATABASE}
+      - MYSQL_USER=${DB_USERNAME}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+    volumes:
+      - firefly-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  firefly-iii:
+    image: fireflyiii/core:${FIREFLY_VERSION}
+    container_name: fincore-firefly-iii
+    depends_on:
+      firefly-db:
+        condition: service_healthy
+    environment:
+      - APP_KEY=${APP_KEY}
+      - APP_URL=${APP_URL}
+      - TZ=${TZ}
+      - TRUSTED_PROXIES=**
+      - DB_CONNECTION=mysql
+      - DB_HOST=firefly-db
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - firefly-upload:/var/www/html/storage/upload
+    ports:
+      - "${FIREFLY_PORT}:8080"
+    restart: unless-stopped
+
+  firefly-importer:
+    image: fireflyiii/data-importer:${IMPORTER_VERSION}
+    container_name: fincore-firefly-importer
+    depends_on:
+      - firefly-iii
+    environment:
+      # Internal URL of the core service (do not use the external APP_URL here)
+      - FIREFLY_III_URL=http://firefly-iii:8080
+      # External URL, used so links in the importer resolve correctly for you
+      - VANITY_URL=${APP_URL}
+      - FIREFLY_III_ACCESS_TOKEN=${FIREFLY_III_ACCESS_TOKEN}
+      - SIMPLEFIN_TOKEN=${SIMPLEFIN_TOKEN}
+      - TZ=${TZ}
+    ports:
+      - "${IMPORTER_PORT}:8080"
+    restart: unless-stopped
+
+volumes:
+  firefly-db:
+  firefly-upload:

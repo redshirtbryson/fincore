@@ -1,0 +1,22 @@
+{
+  "name": "fincore-agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fincore personal finance agent layer: daily Haiku categorizer + Discord ask loop, reading and writing Firefly III.",
+  "scripts": {
+    "daily": "node agent-daily.js",
+    "bot": "node discord-bot.js",
+    "health": "node -e \"import('./lib/firefly.js').then(m=>m.about()).then(v=>console.log(v)).catch(e=>{console.error(e);process.exit(1)})\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@discordjs/rest": "^2.3.0",
+    "discord-api-types": "^0.37.0",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
