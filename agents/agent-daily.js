@@ -53,6 +53,19 @@ async function maybeTriggerImport() {
   }
 }
 
+// Off-host dead man's switch (SPEC section 13): a healthchecks.io-style URL that
+// alerts when the ping STOPS arriving, covering host-level outages the bot's own
+// liveness cross-check cannot see. Optional; unset means skip.
+async function pingHealthcheck(ok) {
+  const url = process.env.HEALTHCHECK_PING_URL;
+  if (!url) return;
+  try {
+    await fetch(ok ? url : `${url.replace(/\/+$/, '')}/fail`, { signal: AbortSignal.timeout(10000) });
+  } catch (e) {
+    console.warn('healthcheck ping failed:', e.message);
+  }
+}
+
 async function main() {
   // Health check first so a bad token fails loudly and early.
   const about = await firefly.about();
@@ -105,7 +118,7 @@ async function main() {
   const overflow = items.length >= CAP ? ` Cap reached (${CAP}); more will process tomorrow.` : '';
   let summary = `Fincore daily: ${applied} auto-categorized, ${asked} need your review.${overflow}`;
   if (failures.length) summary += `\n${failures.length} errors: ${failures.slice(0, 5).join('; ')}`;
-  summary += await dailySnapshotLine();
+  summary += await dailyStoreLines();
   await sendHeartbeat(summary);
   console.log(summary);
 }
@@ -141,38 +154,78 @@ function auditCategorization(db, item, g) {
   }
 }
 
-// Persist today's nw/dti series row once the baseline exists (SPEC 10.3: the
-// series runs from day one, but never ahead of the "before" it is measured
-// against). A snapshot failure is reported, never fatal to the categorizer run.
-async function dailySnapshotLine() {
+// Store-backed daily work, in dependency order: matching and freshness FIRST
+// (matching cleans the data the snapshot sums; freshness writes the verdicts the
+// snapshot row records), then the snapshot (only once the baseline exists, SPEC
+// 10.3), then reconciliation (needs the computed figure). Matching writes are
+// gated on the baseline lock like the snapshot: nothing acts before the baseline
+// exists. Each part is reported, never fatal to the categorizer.
+async function dailyStoreLines() {
   const mods = await loadStore();
-  if (!mods) return '\nSnapshot skipped: fincore.db unavailable.';
+  if (!mods) return '\nSnapshot and quality passes skipped: fincore.db unavailable.';
   let db = null;
+  const lines = [];
+  let computedNetWorth = null;
   try {
     db = mods.store.openStore();
-    if (!mods.store.getMeta(db, 'baseline_locked_at')) {
+    const baselineLocked = Boolean(mods.store.getMeta(db, 'baseline_locked_at'));
+    if (!baselineLocked) {
       // Said out loud on purpose: a silently empty store (unrun onboarding, or a
       // typo'd FINCORE_DB_PATH pointing at a fresh file) must be visible.
-      return '\nSnapshot skipped: baseline not locked (run npm run onboard).';
+      lines.push('Snapshot and matching skipped: baseline not locked (run npm run onboard).');
     }
-    const outcome = await mods.outcomes.snapshot(db, { actor: 'agent-daily' });
-    const { money } = mods.outcomes;
-    const dti = outcome.dti.dti;
-    let line = `\nSnapshot: net worth ${money(outcome.netWorth.netWorth)}, DTI ${dti === null ? 'n/a' : `${(dti * 100).toFixed(1)}%`}${outcome.dti.partial ? ' (partial basis)' : ''}.`;
-    if (outcome.flags.length) line += ` ${outcome.flags.length} data flags; run npm run snapshot for detail.`;
-    if (outcome.stale.length) line += ` STALE: ${outcome.stale.join(', ')}.`;
-    return line;
+
+    let deposits = [];
+    let quality = null;
+    try {
+      quality = await import('./lib/quality.js');
+      const pre = await quality.runPreSnapshotPasses(db, { matchingEnabled: baselineLocked });
+      deposits = pre.deposits;
+      lines.push(...pre.lines);
+    } catch (e) {
+      lines.push(`Quality passes failed: ${e.message}`);
+    }
+
+    if (baselineLocked) {
+      try {
+        const outcome = await mods.outcomes.snapshot(db, { actor: 'agent-daily' });
+        computedNetWorth = outcome.netWorth.netWorth;
+        const { money } = mods.outcomes;
+        const dti = outcome.dti.dti;
+        let line = `Snapshot: net worth ${money(computedNetWorth)}, DTI ${dti === null ? 'n/a' : `${(dti * 100).toFixed(1)}%`}${outcome.dti.partial ? ' (partial basis)' : ''}.`;
+        if (outcome.flags.length) line += ` ${outcome.flags.length} data flags; run npm run snapshot for detail.`;
+        if (outcome.stale.length) line += ` STALE: ${outcome.stale.join(', ')}.`;
+        lines.push(line);
+      } catch (e) {
+        lines.push(`Snapshot failed: ${e.message}`);
+      }
+
+      if (quality) {
+        try {
+          const r = await quality.runReconcilePass(db, { computedNetWorth, deposits });
+          lines.push(...r.lines);
+          quality.surfaceFlags(lines, 'Reconcile', r.flags);
+        } catch (e) {
+          lines.push(`Reconcile pass failed: ${e.message}`);
+        }
+      }
+    }
+
+    return lines.length ? `\n${lines.join('\n')}` : '';
   } catch (e) {
-    return `\nSnapshot failed: ${e.message}`;
+    return `\nStore work failed: ${e.message}`;
   } finally {
     if (db) db.close();
   }
 }
 
-main().catch(async (e) => {
-  console.error(e);
-  try {
-    await sendHeartbeat(`Fincore daily FAILED: ${e.message}`);
-  } catch (_) {}
-  process.exit(1);
-});
+main()
+  .then(() => pingHealthcheck(true))
+  .catch(async (e) => {
+    console.error(e);
+    try {
+      await sendHeartbeat(`Fincore daily FAILED: ${e.message}`);
+    } catch (_) {}
+    await pingHealthcheck(false);
+    process.exit(1);
+  });

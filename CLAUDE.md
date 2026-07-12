@@ -23,11 +23,12 @@ The intelligence is memory plus initiative plus whole-picture judgment, wired to
 - Phase 1 (Firefly stack, SimpleFIN, import): set up by Bryson from `firefly-stack/`.
 - Phase 2 (daily categorizer + Discord ask loop): built, in `agents/`. Hardened 2026-07-12: Discord user allowlist on the write path, deposits fetched and income tagged by source, chunked model calls with retry, ask-then-tag ordering, corrected autoimport trigger, NY-timezone dates, helper tests (`npm test`).
 - Phase 3 (memory and outcomes store, onboarding, baseline lock): built 2026-07-12. `lib/store.js` (fincore.db, migrations, audit log, baseline lock with 30-day correction window), pure engines `lib/dti.js` and `lib/networth.js` with money-grade tests, `lib/outcomes.js` glue, `npm run onboard` wizard, `npm run snapshot`, daily series row appended by agent-daily once the baseline is locked.
-- Phases 4 to 15: not built. See SPEC section 18.
+- Phase 4 (reliability and data quality): built 2026-07-12. Pure engines `lib/matching.js` (transfer/reimbursement pairing, unique-both-sides only), `lib/freshness.js` (upstream freshness from imported-transaction recency), `lib/reconcile.js` (net worth vs Firefly summary, paystub net vs deposits), orchestrated by `lib/quality.js` in the daily run. Backups: `fincore-backup` PM2 job (fincore.db, verified + rotated), `firefly-stack/backup-firefly-db.sh` for MariaDB on the LXC, restore runbook in the stack README. Off-host dead-man ping via HEALTHCHECK_PING_URL. Needs live-data calibration after the 90-day backfill (matcher windows, freshness thresholds) and a real restore test.
+- Phases 5 to 15: not built. See SPEC section 18.
 
 ## Where to start
 
-Phase 3 is built; Bryson runs `npm run onboard` to seed memory and lock the baseline. Next is Phase 4 (reliability and data quality: feed freshness alerting, backups and restore, transfer and reimbursement matching, reconciliation), which protects the accuracy of the two headline numbers. Then Phase 5 (paystub tracker: Discord PDF upload, parse-confirm-store, deposit reconciliation; the store schema and manual template entry already exist). Phase 11 (investments) needs Schwab OAuth approval that takes 1 to 3 days, so kick off registration early but do not block on it.
+Phases 3 and 4 are built; Bryson runs `npm run onboard` to seed memory and lock the baseline, then the 90-day backfill. Next is Phase 5 (paystub tracker: Discord PDF upload, parse-confirm-store, deposit reconciliation; the store schema, manual template entry, and the deposit-drift comparator already exist), then Phase 6 (debt engine plus deposit watcher). Phase 11 (investments) needs Schwab OAuth approval that takes 1 to 3 days, so kick off registration early but do not block on it.
 
 ## Standing conventions (apply to all code and docs you produce)
 

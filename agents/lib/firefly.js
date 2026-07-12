@@ -163,6 +163,84 @@ export async function getAccounts(type) {
   return accounts;
 }
 
+// Firefly's own net worth figure (summary endpoint), used as the independent
+// reference for reconciliation. Returns a number or null when unavailable or not
+// USD; the reconcile engine treats null as a flagged cannot-reconcile, never a pass.
+export async function getSummaryNetWorth(dateStr) {
+  const j = await api(`/summary/basic?start=${dateStr}&end=${dateStr}`);
+  const entry = j?.['net-worth-in-USD'] ?? Object.entries(j || {}).find(([k]) => k.startsWith('net-worth-in-'))?.[1];
+  const v = entry?.monetary_value;
+  const n = typeof v === 'number' ? v : v !== undefined && v !== null && v !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+// Date of the newest transaction touching an account, regardless of type. This is
+// the real upstream-freshness signal for a bank feed: SimpleFIN imports create
+// transactions, so a silent feed shows up as this date going stale.
+export async function getLatestTransactionDate(accountId) {
+  const j = await api(`/accounts/${accountId}/transactions?limit=1&page=1`);
+  const split = j?.data?.[0]?.attributes?.transactions?.[0];
+  return split?.date ? String(split.date).slice(0, 10) : null;
+}
+
+// Generic recent-transaction listing for the matching and reconciliation passes.
+// Unlike getTransactionsNeedingReview this returns ALL splits of the given types
+// (categorized or not) with their category and tags. Returns { items, truncated }:
+// each type has its OWN cap (a busy withdrawal window must not starve deposits),
+// and truncated=true means the window was not fully covered, which matters because
+// the matcher's uniqueness guarantee is only valid over a complete candidate set.
+export async function getRecentTransactions({ types = ['withdrawal', 'deposit'], lookbackDays = 30, capPerType = 600 } = {}) {
+  const end = new Date();
+  const start = new Date(end.getTime() - lookbackDays * 86400000);
+  const startStr = nyDateStr(start);
+  const endStr = nyDateStr(end);
+  const pageSize = 200;
+
+  const items = [];
+  let truncated = false;
+  for (const type of types) {
+    let count = 0;
+    let page = 1;
+    const maxPages = 20; // safety bound
+    for (;;) {
+      if (page > maxPages) {
+        truncated = true;
+        break;
+      }
+      const j = await api(
+        `/transactions?type=${type}&start=${startStr}&end=${endStr}&limit=${pageSize}&page=${page}`
+      );
+      const rows = j?.data || [];
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        for (const s of row?.attributes?.transactions || []) {
+          if (count >= capPerType) {
+            truncated = true;
+            break;
+          }
+          items.push({
+            tx_id: String(row.id),
+            journal_id: String(s.transaction_journal_id),
+            type,
+            amount: s.amount,
+            date: (s.date || '').slice(0, 10),
+            description: s.description || '',
+            account: (type === 'deposit' ? s.destination_name : s.source_name) || '',
+            counterparty: (type === 'deposit' ? s.source_name : s.destination_name) || '',
+            category: s.category_name || '',
+            tags: s.tags || [],
+          });
+          count += 1;
+        }
+        if (truncated) break;
+      }
+      if (truncated || rows.length < pageSize) break;
+      page += 1;
+    }
+  }
+  return { items, truncated };
+}
+
 // Fetch one split of a transaction. Exported so the bot does not need its own copy.
 export async function getSplit(txId, journalId) {
   const j = await api(`/transactions/${txId}`);

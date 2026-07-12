@@ -15,5 +15,11 @@ module.exports = {
       autorestart: false,          // run-once job
       cron_restart: '0 7 * * *',   // 7:00 local each day; adjust to taste
     },
+    {
+      name: 'fincore-backup',
+      script: 'backup.js',
+      autorestart: false,          // run-once job
+      cron_restart: '30 6 * * *',  // daily fincore.db backup before the 7:00 run
+    },
   ],
 };

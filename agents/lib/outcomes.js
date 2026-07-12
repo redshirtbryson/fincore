@@ -21,15 +21,17 @@ function parseStoreTimestamp(ts) {
   return new Date(normalized).getTime();
 }
 
-export function staleFeeds(db, now = new Date()) {
-  const rows = db.prepare('SELECT feed, last_seen FROM feed_freshness').all();
-  const cutoff = now.getTime() - STALE_AFTER_DAYS * 86400000;
-  return rows
-    // Fail closed: a missing or unparseable timestamp counts as stale, never fresh.
-    .filter((r) => {
-      const t = parseStoreTimestamp(r.last_seen);
-      return Number.isNaN(t) || t < cutoff;
-    })
+export function staleFeeds(db) {
+  // Two conditions, both fail closed: a computed stale verdict, OR a verdict that
+  // has not been rewritten recently (the freshness pass itself broke, so trusting
+  // its frozen 'ok' would present stale data as current, SPEC 11's named failure).
+  return db
+    .prepare(
+      `SELECT feed FROM feed_freshness
+       WHERE status != 'ok' OR updated < datetime('now', '-${STALE_AFTER_DAYS} days')
+       ORDER BY feed`
+    )
+    .all()
     .map((r) => r.feed);
 }
 
@@ -56,7 +58,7 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
 
   const nw = computeNetWorth({ accounts: allAccounts, positions });
 
-  const stale = staleFeeds(db, now);
+  const stale = staleFeeds(db);
   // Positions carry their own as-of date; old marks must not be presented as
   // current net worth without saying so. Unparseable counts as stale (fail closed).
   if (latestAsOf) {

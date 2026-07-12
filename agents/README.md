@@ -19,6 +19,22 @@ Baseline rules (SPEC section 20): locks only on explicit confirmation in onboard
 
 The deterministic engines are pure and tested: `lib/networth.js` (Firefly accounts + Schwab positions, no overlap by design, flag-don't-guess on dirty inputs) and `lib/dti.js` (back-end DTI including housing, cadence scaling at 26/12 for biweekly, partial-history blend of observed months with declared amounts, basis always reported). `lib/outcomes.js` is the thin I/O glue.
 
+## Quality passes (Phase 4)
+
+Three more pure engines protect the headline numbers, orchestrated by `lib/quality.js` inside the daily run:
+
+- `lib/matching.js`: transfer and reimbursement matching. Own-account transfer pairs (equal amount, small date window) are tagged `transfer-match:*` and categorized Transfer so they stop double-counting as expense plus income; reimbursable outlays get netted against their payback via `reimbursed`/`reimbursement-match:*` tags. Conservative: only pairs unique on both sides auto-match, ambiguity is reported, and a side already carrying a different category is never overwritten.
+- `lib/freshness.js`: true upstream freshness per bank account (newest imported transaction date, not API reachability). Stale feeds surface in the heartbeat and on every snapshot row, so a dead SimpleFIN token cannot silently freeze the picture.
+- `lib/reconcile.js`: computed net worth vs Firefly's own summary figure, and payroll deposits vs the in-effect paystub template (drift is the signal to upload a new stub, SPEC 10.9).
+
+Calibration note: the matcher ships conservative and untuned. After the 90-day backfill, review the ambiguous counts and the `transfer-match` results against real SimpleFIN data before widening any window or tolerance.
+
+## Backups (Phase 4)
+
+- `fincore-backup` (PM2 cron, daily 6:30): copies fincore.db to `FINCORE_BACKUP_DIR` via the SQLite online backup API, verifies integrity, rotates to `FINCORE_BACKUP_KEEP` copies. Point the directory off this host.
+- The Firefly MariaDB backs up on the LXC with `firefly-stack/backup-firefly-db.sh` (see that README for cron and restore steps).
+- `HEALTHCHECK_PING_URL` (optional): agent-daily pings an off-host dead man's switch after each run, covering host-level outages nothing on this box can report.
+
 ## How the categorization split works
 
 1. On import, the Firefly III rules engine categorizes everything it has a rule for. This is deterministic and free.

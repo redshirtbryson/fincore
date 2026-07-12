@@ -59,6 +59,17 @@ The import trigger is owned by the daily agent (`agent-daily`) in the fincore ag
 - Piggy banks for goals (created later, one per North Star goal).
 - Budgets per category for the overspend checks.
 
+## Backups and restore
+
+Run `backup-firefly-db.sh` on this LXC via cron (see the header of the script). It dumps MariaDB from the db container with a consistent snapshot, gzips, verifies, and rotates. Point `BACKUP_DIR` at a mount that leaves the LXC.
+
+Restore procedure (test this once BEFORE you need it, per SPEC section 11):
+
+1. Stop the stack in Dockge (or `docker compose stop firefly-iii firefly-importer`).
+2. `gunzip -c /mnt/backups/firefly/firefly-YYYY-MM-DD.sql.gz | docker exec -i fincore-firefly-db mariadb -u<user> -p<pass> firefly`
+3. Start the stack, log in, spot-check recent transactions and account balances.
+4. For fincore.db: stop the PM2 agents, copy the dated backup over `agents/fincore.db`, restart, run `npm run snapshot` and confirm the series and baseline look right.
+
 ## Upgrades
 
 Deliberately, never by tracking `latest` (the agents do automated writes against the API, so versions are pinned via `FIREFLY_VERSION` and `IMPORTER_VERSION` in the stack `.env`). To upgrade: snapshot the LXC, bump the version tag in `.env`, recreate through Dockge, and re-test the agent write payloads against a throwaway transaction. Read the Firefly III upgrade notes if the major version changes.

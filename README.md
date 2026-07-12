@@ -16,9 +16,9 @@ Scope is strictly personal finances. Blenko, Redshirt Cloud, and Neptune Politic
 
 ## Status
 
-Built: the Firefly stack, the Phase 2 categorizer with the Discord ask loop, and the Phase 3 memory and outcomes store (fincore.db with audit log, net worth and DTI engines with money-grade tests, the onboarding wizard, and the day-one baseline lock with a 30-day correction window).
+Built: the Firefly stack, the Phase 2 categorizer with the Discord ask loop, the Phase 3 memory and outcomes store (fincore.db with audit log, net worth and DTI engines with money-grade tests, the onboarding wizard, and the day-one baseline lock with a 30-day correction window), and Phase 4 reliability (transfer and reimbursement matching, upstream feed freshness, reconciliation, verified backups with a restore runbook, and an off-host dead-man heartbeat).
 
-Next: reliability and data quality (Phase 4), the paystub tracker (Phase 5), then the remaining engines (debt, cash-flow, allocation, tax), the anomaly and savings watcher, the investment brain, the interactive assistant, graduated autonomy with audit and undo, and the outcomes scorecard that proves net worth and DTI movement. Full plan in `SPEC.md` section 18.
+Next: the paystub tracker (Phase 5), then the remaining engines (debt, cash-flow, allocation, tax), the anomaly and savings watcher, the investment brain, the interactive assistant, graduated autonomy with audit and undo, and the outcomes scorecard that proves net worth and DTI movement. Full plan in `SPEC.md` section 18.
 
 ## Conventions
 

@@ -424,3 +424,15 @@ export function touchFeed(db, feed, { status = 'ok' } = {}) {
      ON CONFLICT(feed) DO UPDATE SET last_seen = datetime('now'), status = excluded.status, updated = datetime('now')`
   ).run(feed, status);
 }
+
+// Record a feed's true upstream freshness: last_seen is the newest DATA seen from
+// it (e.g. latest imported transaction date), status is the freshness verdict the
+// engine computed. Distinct from touchFeed, which records only that we talked to
+// an API just now.
+export function recordFeedStatus(db, feed, { lastSeen = null, status = 'ok' } = {}) {
+  db.prepare(
+    `INSERT INTO feed_freshness (feed, last_seen, status, updated)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(feed) DO UPDATE SET last_seen = excluded.last_seen, status = excluded.status, updated = datetime('now')`
+  ).run(feed, lastSeen, status);
+}
