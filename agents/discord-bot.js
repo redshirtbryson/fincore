@@ -24,6 +24,37 @@ function isAuthorized(userId) {
 
 const DENIED = 'Not authorized to categorize. This bot only accepts writes from its allowlisted user.';
 
+// Audit store, opened once at startup. The store is a native addon; if it is
+// unavailable the bot still works and says so, rather than dying on import.
+let auditStore = null;
+let storeLib = null;
+try {
+  storeLib = await import('./lib/store.js');
+  auditStore = storeLib.openStore();
+} catch (e) {
+  console.warn('fincore.db unavailable; confirmations will not be audited:', e.message);
+}
+
+// SPEC section 15: confirmed actions land in the audit log too. Loud on failure,
+// never blocking the write the user asked for.
+function auditConfirmation({ userId, txId, journalId, category, before, incomeSource }) {
+  if (!auditStore) return;
+  try {
+    storeLib.audit(auditStore, {
+      actor: `discord:${userId}`,
+      action: 'transaction.categorize.confirmed',
+      target: `firefly:tx:${txId}:${journalId}`,
+      before: { category: before ?? null },
+      after: { category, incomeSource },
+      reversalHandle: storeLib.reversalHandleFor('firefly_transaction', `${txId}:${journalId}`, {
+        category: before ?? null,
+      }),
+    });
+  } catch (e) {
+    console.warn('audit write failed:', e.message);
+  }
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -34,7 +65,7 @@ const client = new Client({
 
 // Resolve a transaction: set category, create a learning rule, report back.
 // One split fetch serves the tag merge, the rule token, and income-source detection.
-async function resolve({ txId, journalId, category }) {
+async function resolve({ txId, journalId, category, userId }) {
   const s = await firefly.getSplit(txId, journalId);
   if (!s) throw new Error(`transaction ${txId} split ${journalId} not found`);
 
@@ -51,6 +82,7 @@ async function resolve({ txId, journalId, category }) {
     incomeSource,
     knownTags: s.tags || [],
   });
+  auditConfirmation({ userId, txId, journalId, category, before: s.category_name || null, incomeSource });
   await firefly.createDescriptionRule({
     merchant: counterparty,
     description: s.description || '',
@@ -83,7 +115,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       await interaction.deferUpdate();
-      await resolve({ txId, journalId, category });
+      await resolve({ txId, journalId, category, userId: interaction.user.id });
       await interaction.editReply({
         content: `Categorized as **${category}** and saved a rule for this merchant.`,
         embeds: interaction.message.embeds,
@@ -123,7 +155,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
   try {
-    await resolve({ txId, journalId, category });
+    await resolve({ txId, journalId, category, userId: message.author.id });
     await message.reply(`Categorized as **${category}** and saved a rule.`);
   } catch (e) {
     await message.reply(`Error: ${e.message}`);

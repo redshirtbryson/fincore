@@ -22,11 +22,12 @@ The intelligence is memory plus initiative plus whole-picture judgment, wired to
 
 - Phase 1 (Firefly stack, SimpleFIN, import): set up by Bryson from `firefly-stack/`.
 - Phase 2 (daily categorizer + Discord ask loop): built, in `agents/`. Hardened 2026-07-12: Discord user allowlist on the write path, deposits fetched and income tagged by source, chunked model calls with retry, ask-then-tag ordering, corrected autoimport trigger, NY-timezone dates, helper tests (`npm test`).
-- Phases 3 to 15: not built. See SPEC section 18.
+- Phase 3 (memory and outcomes store, onboarding, baseline lock): built 2026-07-12. `lib/store.js` (fincore.db, migrations, audit log, baseline lock with 30-day correction window), pure engines `lib/dti.js` and `lib/networth.js` with money-grade tests, `lib/outcomes.js` glue, `npm run onboard` wizard, `npm run snapshot`, daily series row appended by agent-daily once the baseline is locked.
+- Phases 4 to 15: not built. See SPEC section 18.
 
 ## Where to start
 
-Start with Phase 3: the memory and outcomes store (`fincore.db`), the onboarding conversation (SPEC 10.4), and the day-one baseline lock. This comes first on purpose: the system is judged by net worth and DTI improvement, so the baseline must be recorded before anything acts, or the result cannot be proven. Then Phase 4 (reliability and data quality: feed freshness, backups, transfer and reimbursement matching, reconciliation), which protects the accuracy of the two headline numbers. Then Phase 5 (paystub tracker) and the engines. Phase 11 (investments) needs Schwab OAuth approval that takes 1 to 3 days, so kick off registration early but do not block on it.
+Phase 3 is built; Bryson runs `npm run onboard` to seed memory and lock the baseline. Next is Phase 4 (reliability and data quality: feed freshness alerting, backups and restore, transfer and reimbursement matching, reconciliation), which protects the accuracy of the two headline numbers. Then Phase 5 (paystub tracker: Discord PDF upload, parse-confirm-store, deposit reconciliation; the store schema and manual template entry already exist). Phase 11 (investments) needs Schwab OAuth approval that takes 1 to 3 days, so kick off registration early but do not block on it.
 
 ## Standing conventions (apply to all code and docs you produce)
 

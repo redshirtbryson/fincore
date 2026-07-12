@@ -10,6 +10,8 @@ npm-debug.log*
 
 # generated data / tokens
 *.db
+*.db-wal
+*.db-shm
 investments.db
 tokens.json
 *.token

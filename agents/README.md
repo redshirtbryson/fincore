@@ -1,13 +1,23 @@
-# Fincore agents (Phase 2: daily categorizer + Discord ask loop)
+# Fincore agents
 
-The net-new code for the fincore personal finance assistant. Mirrors the Gmail AI filter agent: a scheduled job with an external prompt, a per-run cap, tag-based idempotency, and Discord for the human-in-the-loop ask. Reads and writes Firefly III over its REST API.
+The net-new code for the fincore personal finance assistant. A scheduled job with an external prompt, a per-run cap, tag-based idempotency, Discord for the human-in-the-loop ask, and a SQLite store carrying memory, outcomes, the baseline, and the audit log. Reads and writes Firefly III over its REST API.
 
 Style note: plain prose, no em-dashes.
 
 ## What runs
 
-- `fincore-daily` (PM2 cron, runs each morning and exits): pulls new transactions, sends the residue Firefly could not auto-categorize to Claude Haiku, auto-applies confident answers, and posts an ask to Discord when unsure.
+- `fincore-daily` (PM2 cron, runs each morning and exits): pulls new transactions, sends the residue Firefly could not auto-categorize to Claude Haiku, auto-applies confident answers, posts an ask to Discord when unsure, and (once the baseline is locked) appends today's net worth and DTI to the series.
 - `fincore-discord-bot` (PM2 always-on): connects outbound to the Discord gateway, so no inbound port is needed. Catches button clicks and `cat ...` replies, writes the category to Firefly, and creates a merchant rule so that merchant never needs the model again.
+- `npm run onboard` (one-time, rerunnable): the SPEC 10.4 onboarding wizard. Seeds income sources, paystub templates, obligations, goals, constraints, tax and autonomy config, then previews and locks the day-one baseline.
+- `npm run snapshot` (on demand): computes and persists today's net worth + DTI row with full flag detail.
+
+## The store (fincore.db)
+
+`lib/store.js` owns a single SQLite file (better-sqlite3, WAL). Tables per SPEC 10.3: goals, constraints, decisions, recommendations, preferences, nw_dti_series, value_created, paystubs, positions, audit_log, feed_freshness, credit_score (V2 stub), plus obligations (DTI numerator: debt minimums and housing; Firefly has no minimum-payment field), income_sources, and the durable notification_queue. Schema migrates via `PRAGMA user_version` on open, so prod picks up schema changes on pull + restart.
+
+Baseline rules (SPEC section 20): locks only on explicit confirmation in onboarding; a 30-day correction window allows late-found accounts to adjust it (audited); frozen after. Nothing snapshots the series before the baseline exists. Every consequential write lands in `audit_log` with before/after.
+
+The deterministic engines are pure and tested: `lib/networth.js` (Firefly accounts + Schwab positions, no overlap by design, flag-don't-guess on dirty inputs) and `lib/dti.js` (back-end DTI including housing, cadence scaling at 26/12 for biweekly, partial-history blend of observed months with declared amounts, basis always reported). `lib/outcomes.js` is the thin I/O glue.
 
 ## How the categorization split works
 

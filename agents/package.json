@@ -7,12 +7,15 @@
   "scripts": {
     "daily": "node agent-daily.js",
     "bot": "node discord-bot.js",
+    "onboard": "node onboard.js",
+    "snapshot": "node snapshot.js",
     "health": "node -e \"import('./lib/firefly.js').then(m=>m.about()).then(v=>console.log(v)).catch(e=>{console.error(e);process.exit(1)})\"",
     "test": "node --test test/"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
     "@discordjs/rest": "^2.3.0",
+    "better-sqlite3": "^12.11.1",
     "discord-api-types": "^0.37.0",
     "discord.js": "^14.16.0",
     "dotenv": "^16.4.0"

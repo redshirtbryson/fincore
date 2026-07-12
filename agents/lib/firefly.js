@@ -27,8 +27,16 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Bounded per-request: a hung connection must surface as an error (which the retry
+// and skip-and-report machinery handles) rather than stalling a run forever.
+const REQUEST_TIMEOUT_MS = Number(process.env.FIREFLY_TIMEOUT_MS) > 0 ? Number(process.env.FIREFLY_TIMEOUT_MS) : 30000;
+
 async function attempt(path, opts) {
-  const res = await fetch(`${BASE}/api/v1${path}`, { ...opts, headers: headers() });
+  const res = await fetch(`${BASE}/api/v1${path}`, {
+    ...opts,
+    headers: headers(),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     const err = new Error(`Firefly ${opts.method || 'GET'} ${path} -> ${res.status} ${body.slice(0, 300)}`);
@@ -111,10 +119,48 @@ export async function getTransactionsNeedingReview({ lookbackDays = 30, cap = 40
         }
         if (items.length >= cap) break;
       }
+      if (rows.length < 50) break; // short page: no more results, skip the empty-page probe
       page += 1;
     }
   }
   return items;
+}
+
+// List accounts of a Firefly type group ('asset', 'liabilities'). Balances come
+// back as strings; parse defensively and let the caller's engine flag NaN rather
+// than dropping accounts silently.
+export async function getAccounts(type) {
+  const accounts = [];
+  let page = 1;
+  const maxPages = 20; // safety bound
+  while (page <= maxPages) {
+    const j = await api(`/accounts?type=${type}&limit=50&page=${page}`);
+    const rows = j?.data || [];
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const at = row?.attributes || {};
+      // A null or empty balance must stay undefined so the net worth engine flags
+      // it; Number(null) and Number('') are 0, which would silently sum a missing
+      // balance as a legitimate zero.
+      const rawBalance = at.current_balance;
+      accounts.push({
+        id: String(row.id),
+        name: at.name || '',
+        // Firefly reports specific types (loan, debt, mortgage); collapse to the
+        // engine's asset/liability axis via the requested group.
+        type: type === 'asset' ? 'asset' : 'liability',
+        currentBalance:
+          rawBalance === undefined || rawBalance === null || rawBalance === '' ? undefined : Number(rawBalance),
+        currencyCode: at.currency_code || '',
+        includeNetWorth: at.include_net_worth !== false,
+        active: at.active !== false,
+        interest: at.interest !== undefined && at.interest !== null && at.interest !== '' ? Number(at.interest) : null,
+      });
+    }
+    if (rows.length < 50) break; // short page: no more results, skip the empty-page probe
+    page += 1;
+  }
+  return accounts;
 }
 
 // Fetch one split of a transaction. Exported so the bot does not need its own copy.

@@ -7,6 +7,22 @@ import * as firefly from './lib/firefly.js';
 import { categorizeBatch } from './lib/anthropic.js';
 import { sendAsk, sendHeartbeat } from './lib/discord.js';
 
+// The store (better-sqlite3, a native addon) is loaded lazily so a missing or
+// broken native build degrades the snapshot and audit features, never the
+// categorizer itself. Returns null when unavailable.
+let storeModules = null;
+async function loadStore() {
+  if (storeModules) return storeModules;
+  try {
+    const [store, outcomes] = await Promise.all([import('./lib/store.js'), import('./lib/outcomes.js')]);
+    storeModules = { store, outcomes };
+  } catch (e) {
+    console.warn('fincore.db unavailable (continuing without snapshot/audit):', e.message);
+    storeModules = null;
+  }
+  return storeModules;
+}
+
 const THRESHOLD = Number(process.env.CONFIDENCE_THRESHOLD || 0.8);
 const CAP = Number(process.env.CATEGORIZE_CAP || 40);
 const LOOKBACK = Number(process.env.LOOKBACK_DAYS || 30);
@@ -58,6 +74,7 @@ async function main() {
   let applied = 0;
   let asked = 0;
   const failures = [...errors];
+  const auditDb = await openAuditDb();
 
   for (const item of items) {
     const g = byKey.get(`${item.tx_id}|${item.journal_id}`);
@@ -69,6 +86,7 @@ async function main() {
           knownTags: item.existing_tags,
         });
         applied += 1;
+        auditCategorization(auditDb, item, g);
       } else {
         // Ask first, then tag. The review tag makes future runs skip the transaction,
         // so it must never be applied unless the human was actually asked; a failed
@@ -82,11 +100,73 @@ async function main() {
     }
   }
 
+  if (auditDb) auditDb.close();
+
   const overflow = items.length >= CAP ? ` Cap reached (${CAP}); more will process tomorrow.` : '';
   let summary = `Fincore daily: ${applied} auto-categorized, ${asked} need your review.${overflow}`;
   if (failures.length) summary += `\n${failures.length} errors: ${failures.slice(0, 5).join('; ')}`;
+  summary += await dailySnapshotLine();
   await sendHeartbeat(summary);
   console.log(summary);
+}
+
+async function openAuditDb() {
+  const mods = await loadStore();
+  if (!mods) return null;
+  try {
+    return mods.store.openStore();
+  } catch (e) {
+    console.warn('audit store open failed (continuing):', e.message);
+    return null;
+  }
+}
+
+// SPEC section 15: every autonomous action lands in the audit log with a reversal
+// handle. Audit failure is loud but never blocks the categorization itself.
+function auditCategorization(db, item, g) {
+  if (!db) return;
+  try {
+    storeModules.store.audit(db, {
+      actor: 'categorizer',
+      action: 'transaction.categorize',
+      target: `firefly:tx:${item.tx_id}:${item.journal_id}`,
+      before: { category: null },
+      after: { category: g.category, confidence: g.confidence, incomeSource: g.income_source },
+      reversalHandle: storeModules.store.reversalHandleFor('firefly_transaction', `${item.tx_id}:${item.journal_id}`, {
+        category: null,
+      }),
+    });
+  } catch (e) {
+    console.warn(`audit write failed for tx ${item.tx_id}:`, e.message);
+  }
+}
+
+// Persist today's nw/dti series row once the baseline exists (SPEC 10.3: the
+// series runs from day one, but never ahead of the "before" it is measured
+// against). A snapshot failure is reported, never fatal to the categorizer run.
+async function dailySnapshotLine() {
+  const mods = await loadStore();
+  if (!mods) return '\nSnapshot skipped: fincore.db unavailable.';
+  let db = null;
+  try {
+    db = mods.store.openStore();
+    if (!mods.store.getMeta(db, 'baseline_locked_at')) {
+      // Said out loud on purpose: a silently empty store (unrun onboarding, or a
+      // typo'd FINCORE_DB_PATH pointing at a fresh file) must be visible.
+      return '\nSnapshot skipped: baseline not locked (run npm run onboard).';
+    }
+    const outcome = await mods.outcomes.snapshot(db, { actor: 'agent-daily' });
+    const { money } = mods.outcomes;
+    const dti = outcome.dti.dti;
+    let line = `\nSnapshot: net worth ${money(outcome.netWorth.netWorth)}, DTI ${dti === null ? 'n/a' : `${(dti * 100).toFixed(1)}%`}${outcome.dti.partial ? ' (partial basis)' : ''}.`;
+    if (outcome.flags.length) line += ` ${outcome.flags.length} data flags; run npm run snapshot for detail.`;
+    if (outcome.stale.length) line += ` STALE: ${outcome.stale.join(', ')}.`;
+    return line;
+  } catch (e) {
+    return `\nSnapshot failed: ${e.message}`;
+  } finally {
+    if (db) db.close();
+  }
 }
 
 main().catch(async (e) => {
