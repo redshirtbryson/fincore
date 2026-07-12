@@ -7,7 +7,8 @@
   "scripts": {
     "daily": "node agent-daily.js",
     "bot": "node discord-bot.js",
-    "health": "node -e \"import('./lib/firefly.js').then(m=>m.about()).then(v=>console.log(v)).catch(e=>{console.error(e);process.exit(1)})\""
+    "health": "node -e \"import('./lib/firefly.js').then(m=>m.about()).then(v=>console.log(v)).catch(e=>{console.error(e);process.exit(1)})\"",
+    "test": "node --test test/"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

@@ -11,15 +11,27 @@ const THRESHOLD = Number(process.env.CONFIDENCE_THRESHOLD || 0.8);
 const CAP = Number(process.env.CATEGORIZE_CAP || 40);
 const LOOKBACK = Number(process.env.LOOKBACK_DAYS || 30);
 
+// Trigger the Data Importer's autoimport endpoint: POST /autoimport?directory=..&secret=..
+// with an empty body. Requires CAN_POST_AUTOIMPORT, AUTO_IMPORT_SECRET, and
+// IMPORT_DIR_ALLOWLIST on the importer container (see firefly-stack/README.md).
+// Fire-and-forget: the import runs asynchronously in the importer, so transactions it
+// pulls may only be categorized on the next run. The lookback window absorbs that.
 async function maybeTriggerImport() {
-  const url = process.env.IMPORTER_AUTOIMPORT_URL;
-  if (!url) return;
+  const base = (process.env.IMPORTER_URL || '').replace(/\/+$/, '');
+  const secret = process.env.IMPORTER_AUTOIMPORT_SECRET || '';
+  if (process.env.IMPORTER_AUTOIMPORT_URL) {
+    console.warn('IMPORTER_AUTOIMPORT_URL is no longer read; set IMPORTER_URL + IMPORTER_AUTOIMPORT_SECRET (see .env.example).');
+  }
+  if (!base && !secret) return;
+  if (!base || !secret) {
+    console.warn('autoimport trigger skipped: both IMPORTER_URL and IMPORTER_AUTOIMPORT_SECRET must be set.');
+    return;
+  }
+  const dir = process.env.IMPORTER_AUTOIMPORT_DIR || '/import';
+  const url = `${base}/autoimport?directory=${encodeURIComponent(dir)}&secret=${encodeURIComponent(secret)}`;
   try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secret: process.env.IMPORTER_AUTOIMPORT_SECRET || '' }),
-    });
+    const res = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' } });
+    if (!res.ok) console.warn(`importer trigger -> ${res.status} (continuing)`);
   } catch (e) {
     console.warn('importer trigger failed (continuing):', e.message);
   }
@@ -38,23 +50,31 @@ async function main() {
     return;
   }
 
-  const guesses = await categorizeBatch(items);
-  const byId = new Map(guesses.map((g) => [g.tx_id, g]));
+  const { guesses, errors } = await categorizeBatch(items);
+  // Keyed per split, not per transaction: a multi-split transaction yields several
+  // items sharing one tx_id, and collapsing them would apply one split's guess to all.
+  const byKey = new Map(guesses.map((g) => [`${g.tx_id}|${g.journal_id}`, g]));
 
   let applied = 0;
   let asked = 0;
-  const failures = [];
+  const failures = [...errors];
 
   for (const item of items) {
-    const g = byId.get(item.tx_id);
+    const g = byKey.get(`${item.tx_id}|${item.journal_id}`);
     if (!g) continue;
     try {
       if (g.confidence >= THRESHOLD && g.category && g.category !== 'Uncategorized') {
-        await firefly.applyConfirmed(item.tx_id, item.journal_id, g.category);
+        await firefly.applyConfirmed(item.tx_id, item.journal_id, g.category, {
+          incomeSource: g.income_source,
+          knownTags: item.existing_tags,
+        });
         applied += 1;
       } else {
-        await firefly.markReview(item.tx_id, item.journal_id);
+        // Ask first, then tag. The review tag makes future runs skip the transaction,
+        // so it must never be applied unless the human was actually asked; a failed
+        // tag after a sent ask just means a duplicate ask tomorrow, which is benign.
         await sendAsk(item, g);
+        await firefly.markReview(item.tx_id, item.journal_id, { knownTags: item.existing_tags });
         asked += 1;
       }
     } catch (e) {

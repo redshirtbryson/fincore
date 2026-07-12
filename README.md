@@ -18,7 +18,7 @@ Scope is strictly personal finances. Blenko, Redshirt Cloud, and Neptune Politic
 
 Built: the Firefly stack and the Phase 2 categorizer with the Discord ask loop.
 
-Next: the memory and outcomes store with day-one baseline (Phase 3), then the deterministic engines (debt, cash-flow, allocation, tax), the anomaly and savings watcher, the investment brain, the interactive assistant, graduated autonomy with audit and undo, and the outcomes scorecard that proves net worth and DTI movement. Full plan in `SPEC.md` section 16.
+Next: the memory and outcomes store with day-one baseline (Phase 3), then the deterministic engines (debt, cash-flow, allocation, tax), the anomaly and savings watcher, the investment brain, the interactive assistant, graduated autonomy with audit and undo, and the outcomes scorecard that proves net worth and DTI movement. Full plan in `SPEC.md` section 18.
 
 ## Conventions
 

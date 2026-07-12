@@ -21,8 +21,8 @@ The intelligence is memory plus initiative plus whole-picture judgment, wired to
 ## Current state
 
 - Phase 1 (Firefly stack, SimpleFIN, import): set up by Bryson from `firefly-stack/`.
-- Phase 2 (daily categorizer + Discord ask loop): built, in `agents/`.
-- Phases 3 to 13: not built. See SPEC section 16.
+- Phase 2 (daily categorizer + Discord ask loop): built, in `agents/`. Hardened 2026-07-12: Discord user allowlist on the write path, deposits fetched and income tagged by source, chunked model calls with retry, ask-then-tag ordering, corrected autoimport trigger, NY-timezone dates, helper tests (`npm test`).
+- Phases 3 to 15: not built. See SPEC section 18.
 
 ## Where to start
 
@@ -44,7 +44,7 @@ Start with Phase 3: the memory and outcomes store (`fincore.db`), the onboarding
 - Accepted defaults (time zone America/New_York, period boundaries, baseline lock policy, transaction-rewrite policy, notification quiet hours, refresh cadence, single-user, USD, credit score deferred to V2) are recorded in SPEC section 20. Do not re-decide them; follow them.
 - Firefly images are pinned via FIREFLY_VERSION and IMPORTER_VERSION, not latest. Do not switch to latest.
 
-## Guardrails (SPEC sections 13, 14, 15, do not violate)
+## Guardrails (SPEC sections 15, 16, 17, do not violate)
 
 - Reads: full, always (Firefly, Schwab, memory).
 - Autonomous writes: routine categorization by threshold, plus a low-risk allowlist below a dollar threshold (piggy-bank target, note, tag). Everything autonomous is logged to the audit log.

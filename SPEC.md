@@ -1,10 +1,12 @@
 # Fincore: Personal Financial Assistant
 
-## Claude Code Handoff Spec (v4.1)
+## Claude Code Handoff Spec (v4.2)
 
 Owner: Bryson
 Prepared for: Claude Code
 Style rule for all generated docs and code comments: plain prose, no em-dashes.
+
+Changelog v4.2 (sanity pass): recorded three decided defaults in section 20: Schwab owns investment and retirement value in net worth (SimpleFIN does not map brokerage into Firefly), back-end DTI includes the housing obligation (rent counts even though it is not a liability), and DTI's trailing 12-month income average falls back to available history plus onboarding-declared amounts until 12 months accrue. Added a liability-terms convention (Firefly has no native minimum-payment field), pay cadence as a stored paystub field (10.9), deletion of the Discord paystub upload after parsing (10.9), a durable quiet-hours queue (13), and an off-host dead-man heartbeat (13). Clarified that Phase 2 categorization is not value-attributed action (18).
 
 Changelog v4.1: added the assumptions and decisions section (20) recording accepted defaults for transaction rewrites, baseline lock, time zone and periods, cost ceiling, notifications, history window, and refresh cadence; made hardening a hard rule (11); documented the DTI formula (10.5); pinned the Firefly image versions; and stubbed credit score as a deferred V2 signal (10.3, 10.14).
 
@@ -153,7 +155,7 @@ SimpleFIN feeds the Data Importer into Firefly. Exchange the single-use claim to
 
 ## 9. Firefly III as the personal ledger
 
-Firefly primitives, not custom schema. Rules engine for known merchants. Liability accounts carry APR and minimum. Piggy banks are goals. Budgets drive overspend. Manual asset accounts hold off-feed holdings (section 19). Income transactions are tagged by source (Blenko, Redshirt Cloud, Neptune Political). A full-scope PAT authenticates everything; section 15 governs its use.
+Firefly primitives, not custom schema. Rules engine for known merchants. Liability accounts carry the APR; minimum payments and rent-like obligations live in the `obligations` table (section 20), since Firefly has no native minimum-payment field. Piggy banks are goals. Budgets drive overspend. Manual asset accounts hold off-feed holdings (section 19). Income transactions are tagged by source (Blenko, Redshirt Cloud, Neptune Political). A full-scope PAT authenticates everything; section 15 governs its use.
 
 ---
 
@@ -192,7 +194,7 @@ Output: memory seeded, templates and config set, baseline locked. Stored in `fin
 
 `lib/debt-engine.js`, pure, tested. DTI, per-debt amortization, avalanche and snowball with interest saved versus minimum-only, marginal interest saved per dollar, lump-sum allocation, and scenario rate projection (rate change as an assumption, forward path never a prediction). The model explains and adapts; it does not compute.
 
-DTI is defined explicitly, because it is a headline metric and easy to compute a plausible non-standard number. Use back-end DTI: total monthly debt obligations (all debts, not just housing) over gross monthly income. Irregular income is annualized as a trailing 12-month average and divided to a monthly figure; W-2 gross comes from the paystub template, not the net deposit. The formula and these choices are documented in the function and asserted in its tests.
+DTI is defined explicitly, because it is a headline metric and easy to compute a plausible non-standard number. Use back-end DTI: total monthly debt obligations over gross monthly income. The numerator includes the housing obligation whether it is a mortgage payment or rent; rent is not a Firefly liability, so it is entered as a recurring obligation (see the liability-terms convention in section 20). Irregular income is annualized as a trailing 12-month average and divided to a monthly figure; until 12 months of history exist, use the average over available history seeded with the onboarding-declared amounts, and note the shorter basis wherever the figure is shown. W-2 gross comes from the paystub template scaled by its stored pay cadence (biweekly is 26 over 12, semimonthly is 2), not the net deposit. The formula and these choices are documented in the function and asserted in its tests.
 
 ### 10.6 Cash-flow and liquidity forecaster
 
@@ -210,13 +212,13 @@ Runs on each sync. Detectors: subscription price increase, duplicate charge, unu
 
 `lib/paystub.js` plus the `paystubs` table. Purpose: make the gross-to-net story visible and reconcile it into the total picture, so taxes, healthcare, retirement, and other withholdings are not hidden inside a net deposit.
 
-Data model. Each uploaded stub is stored as a template row with an `effective_from` date and per-line fields: source, gross, federal_tax, state_tax, local_tax, fica_ss, fica_medicare, healthcare_premium, retirement_contribution, other_deductions (list), net_pay. A new upload supersedes the prior one from its effective date forward; historical periods keep using whichever template was in effect at the time, so the trend stays accurate across raises and benefits changes.
+Data model. Each uploaded stub is stored as a template row with an `effective_from` date, a `pay_cadence` (weekly, biweekly, semimonthly, monthly; captured at onboarding, needed to scale per-stub gross to the monthly figures DTI and reporting use), and per-line fields: source, gross, federal_tax, state_tax, local_tax, fica_ss, fica_medicare, healthcare_premium, retirement_contribution, other_deductions (list), net_pay. A new upload supersedes the prior one from its effective date forward; historical periods keep using whichever template was in effect at the time, so the trend stays accurate across raises and benefits changes.
 
 Entry model: upload and carry forward. Bryson uploads one stub at onboarding to seed the template, and a new stub only when something changes. There is no scheduled drafting and no pay-cadence guessing; uploads are the only push, and deposits define the rhythm.
 
 1. Upload. Bryson drops a paystub PDF or image into the Discord channel.
 2. Parse and confirm. The assistant extracts the fields and shows them for confirmation before writing. Never write a stub blind: layouts vary by payroll provider, and a wrong withholding figure would quietly corrupt the tax and net-worth picture. Where the format needs it, OCR first, then parse.
-3. Carry forward. On confirm, the parsed stub becomes the current template with today's effective date. The uploaded file is not retained; only the extracted fields persist in `fincore.db`, since the document is sensitive and there is no reason to keep it.
+3. Carry forward. On confirm, the parsed stub becomes the current template with today's effective date. The uploaded file is not retained; only the extracted fields persist in `fincore.db`, since the document is sensitive and there is no reason to keep it. Not retained has to include Discord: the upload lives on Discord's CDN attached to the message, so after a confirmed parse the bot deletes the upload message (it needs the Manage Messages permission for this). Otherwise the retention claim is false in the place that matters.
 4. Apply. Every payroll deposit after that is interpreted through the in-effect template without asking.
 
 Reconciliation as the re-upload trigger. On each payroll deposit, compare the in-effect template's net pay to the actual deposit. If they match, stay silent. If they drift, ping Bryson ("your Blenko deposit came in 80 different from your paystub template; upload the new stub when you can"). That mismatch alert is what tells him to upload again, so the system notices the change rather than relying on him to remember.
@@ -308,9 +310,9 @@ The wheel app remains the system of record for options execution. fincore reads 
 
 One channel, one always-on gateway bot (outbound, no inbound port). Uses: the ask loop (shipped), proactive anomaly alerts with severity tiers (high severity pings immediately, low severity rolls into a daily or weekly digest so the watcher does not become noise), recommendation and change confirmations, the conversational assistant, in-period discipline nudges (pre-committed targets with mid-period checks like "340 of 500 dining with 11 days left," which bends habits in a way retrospective totals do not), and the scorecard.
 
-Notification boundaries. Proactive pushes respect quiet hours of 10pm to 7am local and queue into the 7am summary. The one exception that pings live overnight is a critical-severity anomaly (suspected fraud). Anything Bryson initiates, questions and confirmations, works any hour. The heartbeat is a single consolidated daily message, not one per agent.
+Notification boundaries. Proactive pushes respect quiet hours of 10pm to 7am local and queue into the 7am summary. The one exception that pings live overnight is a critical-severity anomaly (suspected fraud). Anything Bryson initiates, questions and confirmations, works any hour. The heartbeat is a single consolidated daily message, not one per agent. The quiet-hours queue is durable (a table in `fincore.db`), not bot memory, so a restart during the night does not drop queued alerts.
 
-Bot liveness. The gateway bot is the single point of failure for the interactive surface. PM2 auto-restarts it. As a cross-check, the bot posts a daily online ping, and the daily agent (which posts through Discord's REST independently of the gateway) raises an alert if that ping is missing, so a bot outage surfaces even though the bot is what is down.
+Bot liveness. The gateway bot is the single point of failure for the interactive surface. PM2 auto-restarts it. As a cross-check, the bot posts a daily online ping, and the daily agent (which posts through Discord's REST independently of the gateway) raises an alert if that ping is missing, so a bot outage surfaces even though the bot is what is down. That cross-check only covers the bot process; if the PM2 host or LXC is down, both halves are silent. Close that with an off-host dead man's switch: the daily agent pings an external or other-node heartbeat monitor (healthchecks.io style, or a cron on another homelab node) that alerts when the ping stops.
 
 ---
 
@@ -371,7 +373,7 @@ Calibration: track predicted versus realized (paydown savings, categorizer confi
 
 Phase 1: Foundation. Firefly stack, SimpleFIN, dedup, import, PAT. (Bryson.)
 Phase 2: Categorization. [Shipped.] Update the prompt to personal-only, income-source tagging, and the transfer and reimbursable pass.
-Phase 3: Memory and outcomes store, onboarding conversation, and baseline lock. Nothing acts before the baseline exists.
+Phase 3: Memory and outcomes store, onboarding conversation, and baseline lock. Nothing acts before the baseline exists. (Phase 2 categorization runs before the baseline by design; it is data hygiene, not value-attributed action, and nothing it does is claimed in the value ledger.)
 Phase 4: Reliability and data quality. Feed freshness guarding, backups and restore, transfer and reimbursement matching, reconciliation. Early, because these protect the two headline numbers.
 Phase 5: Paystub and withholding tracker, with reconciliation to deposits.
 Phase 6: Debt and forecast engine (with tests). Wire the deposit watcher.
@@ -405,6 +407,9 @@ Foundation:
 - Transaction identity and rewrites. A transaction's identity is its Firefly id; the `ai-categorized` tag and stored category live on it. When an import updates an existing transaction, re-evaluate only on a material change (amount, or description past a similarity threshold, for example a resolved merchant name). Leave a note when the system changes its own prior categorization. Never overwrite a hand-confirmed category; user confirmations always win.
 - Baseline lock. The baseline does not lock at the end of onboarding. It locks only after Bryson explicitly confirms accounts, debts with APRs, and manual assets are all in. A one-time 30-day correction window lets a later-found account retroactively adjust the baseline rather than appear as a fake gain. Frozen after the window.
 - Time zone and periods. Everything uses America/New_York. A day rolls at local midnight, a month is the calendar month in local time, a week is Monday to Sunday (matching the Sunday P&L), quarterly tax dates follow the IRS calendar.
+- Investment value ownership. Schwab owns investment and retirement account value in net worth. Brokerage and retirement accounts are NOT mapped into Firefly via SimpleFIN; Firefly stays cash and debt, the `positions` store carries investment value, and the net-worth engine sums Firefly balances plus Schwab positions plus manual assets with no overlap. Retirement balances not visible at Schwab are manual asset accounts, and paystub retirement contributions reconcile against whichever of those holds the balance rather than being added on top.
+- DTI numerator and the liability-terms convention. Back-end DTI includes the housing obligation (mortgage payment or rent). Firefly liability accounts have no native minimum-payment field, so debt terms (minimum payment, and rent or similar recurring non-debt obligations that belong in the DTI numerator) live in an `obligations` table in `fincore.db` keyed by Firefly account id where one applies, seeded at onboarding and edited via confirmed writes. APR stays on the Firefly liability.
+- DTI income basis with partial history. The trailing 12-month average uses available history seeded with onboarding-declared amounts until 12 real months accrue; any figure computed on a shorter basis says so.
 
 Reliability and cost:
 - Hardening is a hard rule for all scripts (section 11): validate inputs, fail clean with no partial writes, per-item processing, retry with backoff then skip-and-report, per-run caps.

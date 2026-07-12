@@ -43,25 +43,25 @@ Open the importer UI at `http://<lxc>:${IMPORTER_PORT}` and start a SimpleFIN im
 2. Map each SimpleFIN account to a Firefly III account, and set the correct Firefly account type before importing:
    - checking and savings : asset accounts
    - credit cards : liability accounts (credit card type)
-   - loans : liability accounts, and record the interest rate and minimum payment (the debt agent reads these)
-   - brokerage or retirement balances, if SimpleFIN exposes them : asset accounts
+   - loans : liability accounts, and record the interest rate (minimum payments are captured at onboarding into the fincore store; Firefly has no native field for them)
+   - brokerage or retirement accounts : do NOT map these. Schwab owns investment value in net worth (SPEC section 20); mapping them here too would double count. Deselect them in the importer configuration.
 3. Set opening balances via the API formula so balances reconcile from day one (see the Firefly III importer docs on opening balances).
 4. Run the import and spot-check that the count looks right.
 
 ## Ongoing imports
 
-The import trigger is owned by the daily agent (`agent-daily`) in the fincore agent layer, which calls the importer to pull new transactions each morning before it categorizes. You can also run imports manually from the importer UI at any time. If you want the importer to run on its own cron instead, use its auto-import mode with a saved JSON config; but the default design is agent-driven so categorization and import stay in one daily pass.
+The import trigger is owned by the daily agent (`agent-daily`) in the fincore agent layer, which POSTs the importer's autoimport endpoint each morning before it categorizes. For that to work, set `CAN_POST_AUTOIMPORT=true` and a 16+ character `AUTO_IMPORT_SECRET` in the stack `.env`, and place your saved import config JSON files in the `firefly-import` volume (mounted at `/import`); the same values go in the agent `.env`. Note the trigger is fire-and-forget: the import runs asynchronously, so transactions it pulls may only be categorized on the next daily pass; the agent's lookback window absorbs that. You can also run imports manually from the importer UI at any time, or skip the trigger entirely and run the importer on its own cron.
 
 ## What the agents expect from this stack
 
 - A reachable Firefly III API at `APP_URL` with a valid Personal Access Token.
-- Liability accounts carrying APR and minimum payment for the debt module.
+- Liability accounts carrying the APR for the debt module (minimum payments are captured into the fincore store at onboarding).
 - Piggy banks for goals (created later, one per North Star goal).
 - Budgets per category for the overspend checks.
 
 ## Upgrades
 
-Through Dockge: pull the latest images and recreate. Firefly III publishes core and data-importer under the `latest` tag. Take a snapshot of the LXC before major version jumps and read the Firefly III upgrade notes if the major version changes.
+Deliberately, never by tracking `latest` (the agents do automated writes against the API, so versions are pinned via `FIREFLY_VERSION` and `IMPORTER_VERSION` in the stack `.env`). To upgrade: snapshot the LXC, bump the version tag in `.env`, recreate through Dockge, and re-test the agent write payloads against a throwaway transaction. Read the Firefly III upgrade notes if the major version changes.
 
 ## Health check
 

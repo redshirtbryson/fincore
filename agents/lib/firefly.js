@@ -9,6 +9,12 @@ const TAG_DONE = process.env.TAG_DONE || 'ai-categorized';
 const TAG_REVIEW = process.env.TAG_REVIEW || 'needs-review';
 const RULE_GROUP_TITLE = process.env.RULE_GROUP_TITLE || 'AI Categorized';
 
+// Transient-failure retry (SPEC section 11 hardening rule): network errors, 429,
+// and 5xx get a couple of backed-off retries before the error surfaces. A retried
+// POST could in theory double-apply if the first attempt succeeded before dying,
+// but the only POSTs here (rules, rule groups) are harmless to duplicate.
+const RETRY_BACKOFF_MS = [1000, 4000];
+
 function headers() {
   return {
     Authorization: `Bearer ${PAT}`,
@@ -17,14 +23,35 @@ function headers() {
   };
 }
 
-async function api(path, opts = {}) {
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function attempt(path, opts) {
   const res = await fetch(`${BASE}/api/v1${path}`, { ...opts, headers: headers() });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Firefly ${opts.method || 'GET'} ${path} -> ${res.status} ${body.slice(0, 300)}`);
+    const err = new Error(`Firefly ${opts.method || 'GET'} ${path} -> ${res.status} ${body.slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+async function api(path, opts = {}) {
+  let lastErr = null;
+  for (let i = 0; i <= RETRY_BACKOFF_MS.length; i += 1) {
+    try {
+      return await attempt(path, opts);
+    } catch (e) {
+      lastErr = e;
+      const transient = e.status === undefined || e.status === 429 || e.status >= 500;
+      if (!transient || i === RETRY_BACKOFF_MS.length) throw e;
+      await sleep(RETRY_BACKOFF_MS[i]);
+    }
+  }
+  throw lastErr;
 }
 
 export async function about() {
@@ -32,100 +59,143 @@ export async function about() {
   return j?.data;
 }
 
-// Return one item per uncategorized withdrawal split within the lookback window,
-// skipping anything already tagged done or review.
+// All period math uses America/New_York (SPEC section 20), not the host clock's UTC date.
+export function nyDateStr(date = new Date()) {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(date);
+}
+
+// Return one item per uncategorized withdrawal or deposit split within the lookback
+// window, skipping anything already tagged done or review. Deposits are fetched
+// FIRST on purpose: they are few and high-value (income recognition), and a large
+// withdrawal backlog must not starve them out of the shared cap. Transfers Firefly
+// already knows about (type=transfer) are not fetched.
 export async function getTransactionsNeedingReview({ lookbackDays = 30, cap = 40 } = {}) {
   const end = new Date();
   const start = new Date(end.getTime() - lookbackDays * 86400000);
-  const startStr = start.toISOString().slice(0, 10);
-  const endStr = end.toISOString().slice(0, 10);
+  const startStr = nyDateStr(start);
+  const endStr = nyDateStr(end);
 
   const items = [];
-  let page = 1;
-  const maxPages = 20; // safety bound
-  while (page <= maxPages && items.length < cap) {
-    const j = await api(
-      `/transactions?type=withdrawal&start=${startStr}&end=${endStr}&limit=50&page=${page}`
-    );
-    const rows = j?.data || [];
-    if (rows.length === 0) break;
+  for (const type of ['deposit', 'withdrawal']) {
+    let page = 1;
+    const maxPages = 20; // safety bound
+    while (page <= maxPages && items.length < cap) {
+      const j = await api(
+        `/transactions?type=${type}&start=${startStr}&end=${endStr}&limit=50&page=${page}`
+      );
+      const rows = j?.data || [];
+      if (rows.length === 0) break;
 
-    for (const row of rows) {
-      const splits = row?.attributes?.transactions || [];
-      for (const s of splits) {
-        const tags = s.tags || [];
-        const hasCategory = s.category_name && s.category_name.trim() !== '';
-        if (hasCategory) continue;
-        if (tags.includes(TAG_DONE) || tags.includes(TAG_REVIEW)) continue;
-        items.push({
-          tx_id: String(row.id),
-          journal_id: String(s.transaction_journal_id),
-          description: s.description || '',
-          merchant: s.destination_name || '',
-          amount: s.amount,
-          currency: s.currency_code || '',
-          date: (s.date || '').slice(0, 10),
-          account: s.source_name || '',
-          existing_tags: tags,
-        });
+      for (const row of rows) {
+        const splits = row?.attributes?.transactions || [];
+        for (const s of splits) {
+          const tags = s.tags || [];
+          const hasCategory = s.category_name && s.category_name.trim() !== '';
+          if (hasCategory) continue;
+          if (tags.includes(TAG_DONE) || tags.includes(TAG_REVIEW)) continue;
+          items.push({
+            tx_id: String(row.id),
+            journal_id: String(s.transaction_journal_id),
+            type,
+            description: s.description || '',
+            // For a withdrawal the counterparty is the destination; for a deposit it is the source.
+            merchant: (type === 'deposit' ? s.source_name : s.destination_name) || '',
+            amount: s.amount,
+            currency: s.currency_code || '',
+            date: (s.date || '').slice(0, 10),
+            account: (type === 'deposit' ? s.destination_name : s.source_name) || '',
+            existing_tags: tags,
+          });
+          if (items.length >= cap) break;
+        }
         if (items.length >= cap) break;
       }
-      if (items.length >= cap) break;
+      page += 1;
     }
-    page += 1;
   }
   return items;
 }
 
-async function getSplit(txId, journalId) {
+// Fetch one split of a transaction. Exported so the bot does not need its own copy.
+export async function getSplit(txId, journalId) {
   const j = await api(`/transactions/${txId}`);
   const splits = j?.data?.attributes?.transactions || [];
   return splits.find((s) => String(s.transaction_journal_id) === String(journalId)) || splits[0];
 }
 
-// Set category on a split and adjust its tag set. Firefly replaces the tag array
-// on update, so we read current tags first and merge.
-export async function setCategory(txId, journalId, categoryName, { addTags = [], removeTags = [] } = {}) {
-  const split = await getSplit(txId, journalId);
-  const current = new Set(split?.tags || []);
+// Set category on a split and adjust its tag set. Firefly replaces the tag array on
+// update, so current tags are merged in: from opts.knownTags when the caller already
+// has them (saves a GET per write in the daily loop), else fetched.
+// categoryName semantics: a string sets it, null clears it, undefined omits the field
+// entirely (tags-only update).
+export async function setCategory(txId, journalId, categoryName, { addTags = [], removeTags = [], knownTags = null } = {}) {
+  const baseTags = knownTags ?? (await getSplit(txId, journalId))?.tags ?? [];
+  const current = new Set(baseTags);
   for (const t of addTags) current.add(t);
   for (const t of removeTags) current.delete(t);
+
+  const update = {
+    transaction_journal_id: String(journalId),
+    tags: Array.from(current),
+  };
+  if (categoryName !== undefined) update.category_name = categoryName;
 
   const body = {
     apply_rules: false,
     fire_webhooks: false,
-    transactions: [
-      {
-        transaction_journal_id: String(journalId),
-        category_name: categoryName,
-        tags: Array.from(current),
-      },
-    ],
+    transactions: [update],
   };
   return api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
 }
 
-export async function markReview(txId, journalId) {
-  return setCategory(txId, journalId, null, { addTags: [TAG_REVIEW] }).catch(async () => {
-    // category_name null may be rejected on some versions; fall back to tags-only update.
-    const split = await getSplit(txId, journalId);
-    const current = new Set(split?.tags || []);
-    current.add(TAG_REVIEW);
-    const body = {
-      apply_rules: false,
-      fire_webhooks: false,
-      transactions: [{ transaction_journal_id: String(journalId), tags: Array.from(current) }],
-    };
-    return api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
-  });
+// Some Firefly versions reject category_name null as a validation error. Once seen,
+// remembered for the process lifetime so the doomed attempt is not repeated per item.
+let nullCategoryRejected = false;
+
+export async function markReview(txId, journalId, { knownTags = null } = {}) {
+  if (!nullCategoryRejected) {
+    try {
+      return await setCategory(txId, journalId, null, { addTags: [TAG_REVIEW], knownTags });
+    } catch (e) {
+      if (e.status !== 400 && e.status !== 422) throw e;
+      nullCategoryRejected = true;
+    }
+  }
+  return setCategory(txId, journalId, undefined, { addTags: [TAG_REVIEW], knownTags });
+}
+
+// Slug an income source for a Firefly tag: "Redshirt Cloud" -> "income-source:redshirt-cloud".
+export function incomeSourceTag(source) {
+  const slug = String(source || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return slug ? `income-source:${slug}` : null;
 }
 
 // Apply a confirmed answer: set category, mark done, clear review.
-export async function applyConfirmed(txId, journalId, categoryName) {
+// Income with a known source gets an income-source tag (SPEC 10.2); Business Expense
+// gets a reimbursable tag so the later payback can be matched instead of
+// double-counted (SPEC section 11).
+export async function applyConfirmed(txId, journalId, categoryName, { incomeSource = null, knownTags = null } = {}) {
+  const addTags = [TAG_DONE, ...extraTagsFor(categoryName, incomeSource)];
   return setCategory(txId, journalId, categoryName, {
-    addTags: [TAG_DONE],
+    addTags,
     removeTags: [TAG_REVIEW],
+    knownTags,
   });
+}
+
+// Policy tags implied by a category. Shared by applyConfirmed (this transaction) and
+// createDescriptionRule (future transactions matched by the rule), so a recurring
+// Business Expense keeps getting its reimbursable tag even though rule-categorized
+// imports never pass through the agent again.
+export function extraTagsFor(categoryName, incomeSource = null) {
+  const tags = [];
+  if (categoryName === 'Income') {
+    const t = incomeSourceTag(incomeSource);
+    if (t) tags.push(t);
+  }
+  if (categoryName === 'Business Expense') tags.push('reimbursable');
+  return tags;
 }
 
 async function ensureRuleGroup() {
@@ -147,12 +217,17 @@ export function deriveMerchantToken({ merchant, description }) {
   return raw.replace(/\s+#?\d{3,}.*$/, '').replace(/\s{2,}/g, ' ').trim().slice(0, 80);
 }
 
-// Create a description_contains -> set_category rule so this merchant is
-// categorized deterministically next time and never hits the model again.
-export async function createDescriptionRule({ merchant, description, category }) {
+// Create a description_contains -> set_category rule so this merchant is categorized
+// deterministically next time and never hits the model again. extraTags become
+// add_tag actions so policy tags survive rule-based categorization too.
+export async function createDescriptionRule({ merchant, description, category, extraTags = [] }) {
   const token = deriveMerchantToken({ merchant, description });
   if (!token) return null;
   const ruleGroupId = await ensureRuleGroup();
+  const actions = [{ type: 'set_category', value: category, stop_processing: false, active: true }];
+  for (const t of extraTags) {
+    actions.push({ type: 'add_tag', value: t, stop_processing: false, active: true });
+  }
   const body = {
     title: `AI: ${token} -> ${category}`.slice(0, 100),
     rule_group_id: ruleGroupId,
@@ -161,7 +236,7 @@ export async function createDescriptionRule({ merchant, description, category })
     strict: false,
     stop_processing: false,
     triggers: [{ type: 'description_contains', value: token, stop_processing: false, active: true }],
-    actions: [{ type: 'set_category', value: category, stop_processing: false, active: true }],
+    actions,
   };
   return api('/rules', { method: 'POST', body: JSON.stringify(body) });
 }

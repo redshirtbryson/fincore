@@ -57,6 +57,13 @@ services:
       - FIREFLY_III_ACCESS_TOKEN=${FIREFLY_III_ACCESS_TOKEN}
       - SIMPLEFIN_TOKEN=${SIMPLEFIN_TOKEN}
       - TZ=${TZ}
+      # Autoimport trigger (optional; used by agent-daily). Leave AUTO_IMPORT_SECRET
+      # blank to disable. Import config JSON files go in the firefly-import volume.
+      - CAN_POST_AUTOIMPORT=${CAN_POST_AUTOIMPORT:-false}
+      - AUTO_IMPORT_SECRET=${AUTO_IMPORT_SECRET:-}
+      - IMPORT_DIR_ALLOWLIST=/import
+    volumes:
+      - firefly-import:/import
     ports:
       - "${IMPORTER_PORT}:8080"
     restart: unless-stopped
@@ -64,3 +71,4 @@ services:
 volumes:
   firefly-db:
   firefly-upload:
+  firefly-import:
