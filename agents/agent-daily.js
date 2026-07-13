@@ -73,9 +73,15 @@ async function main() {
 
   await maybeTriggerImport();
 
+  // No early return on an empty residue: the store-backed passes (snapshot,
+  // valuations, Schwab, freshness) must run every day regardless of whether
+  // there is anything to categorize.
   const items = await firefly.getTransactionsNeedingReview({ lookbackDays: LOOKBACK, cap: CAP });
   if (items.length === 0) {
-    await sendHeartbeat('Fincore daily: no new transactions to categorize.');
+    let summary = 'Fincore daily: no new transactions to categorize.';
+    summary += await dailyStoreLines();
+    await sendHeartbeat(summary);
+    console.log(summary);
     return;
   }
 
