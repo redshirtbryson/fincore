@@ -7,7 +7,7 @@ authorization URL in a browser, you sign in and approve, and the local callback 
 resulting token is written to SCHWAB_TOKEN_PATH for the headless daily fetch to
 reuse.
 
-Reads env: SCHWAB_APP_KEY, SCHWAB_APP_SECRET, SCHWAB_CALLBACK_URL (default
+Reads env: SCHWAB_APP_KEY, SCHWAB_APP_SECRET, SCHWAB_CALLBACK_URL (default https://127.0.0.1:8182; must match the app registration
 https://127.0.0.1), SCHWAB_TOKEN_PATH (default ./schwab-token.json).
 
 Never prints token contents. Secrets stay in memory and on disk, never on screen.
@@ -21,7 +21,7 @@ import schwab
 def main():
     app_key = os.environ.get("SCHWAB_APP_KEY")
     app_secret = os.environ.get("SCHWAB_APP_SECRET")
-    callback_url = os.environ.get("SCHWAB_CALLBACK_URL", "https://127.0.0.1")
+    callback_url = os.environ.get("SCHWAB_CALLBACK_URL", "https://127.0.0.1:8182")
     token_path = os.environ.get("SCHWAB_TOKEN_PATH", "./schwab-token.json")
 
     missing = [
