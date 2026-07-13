@@ -341,12 +341,21 @@ export function deriveMerchantToken({ merchant, description }) {
   return raw.replace(/\s+#?\d{3,}.*$/, '').replace(/\s{2,}/g, ' ').trim().slice(0, 80);
 }
 
+// Generic counterparties that must never seed a rule: a manual transaction with no
+// real payee resolves to Firefly's cash account, and a rule keyed on that matches
+// unrelated transactions.
+const GENERIC_TOKENS = /^(cash( account| wallet)?|\(cash\)|unknown|n\/a)$/i;
+
+export function isGenericCounterparty(token) {
+  return token === '' || GENERIC_TOKENS.test(token.trim());
+}
+
 // Create a description_contains -> set_category rule so this merchant is categorized
 // deterministically next time and never hits the model again. extraTags become
 // add_tag actions so policy tags survive rule-based categorization too.
 export async function createDescriptionRule({ merchant, description, category, extraTags = [] }) {
   const token = deriveMerchantToken({ merchant, description });
-  if (!token) return null;
+  if (!token || isGenericCounterparty(token)) return null;
   const ruleGroupId = await ensureRuleGroup();
   const actions = [{ type: 'set_category', value: category, stop_processing: false, active: true }];
   for (const t of extraTags) {

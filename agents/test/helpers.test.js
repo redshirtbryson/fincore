@@ -2,9 +2,9 @@
 // Engine tests (debt, cash-flow, tax, ...) arrive with their engines in later phases.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveMerchantToken, incomeSourceTag, extraTagsFor, nyDateStr } from '../lib/firefly.js';
+import { deriveMerchantToken, isGenericCounterparty, incomeSourceTag, extraTagsFor, nyDateStr } from '../lib/firefly.js';
 import { chunk, extractJson, normalizeGuess } from '../lib/anthropic.js';
-import { catButton, buildAsk } from '../lib/discord.js';
+import { catButton, buildAsk, buildHeartbeat, formatAmount } from '../lib/discord.js';
 import { CATEGORY_SET, detectIncomeSource } from '../lib/categories.js';
 
 test('deriveMerchantToken strips trailing store numbers', () => {
@@ -94,6 +94,42 @@ test('buildAsk dedupes categories, drops unfit buttons, keeps Other', () => {
   assert.equal(buttons[0].custom_id, 'cat|11|22|Groceries');
   assert.equal(buttons[2].custom_id, 'other|11|22');
   assert.equal(ask.embeds[0].fields[0].name, 'Merchant');
+});
+
+test('generic counterparties never seed rules', () => {
+  assert.equal(isGenericCounterparty('Cash account'), true);
+  assert.equal(isGenericCounterparty('cash wallet'), true);
+  assert.equal(isGenericCounterparty('(cash)'), true);
+  assert.equal(isGenericCounterparty(''), true);
+  assert.equal(isGenericCounterparty('KROGER'), false);
+  assert.equal(isGenericCounterparty('Cash App *Payment'), false); // a real merchant containing cash still passes
+});
+
+test('formatAmount renders money to 2 decimals and survives junk', () => {
+  assert.equal(formatAmount('12.340000000000', 'USD'), '12.34 USD');
+  assert.equal(formatAmount('1499.9', 'USD'), '1,499.90 USD');
+  assert.equal(formatAmount('garbage', 'USD'), 'garbage USD'); // never hide the raw value
+  assert.equal(formatAmount(5, ''), '5.00');
+  assert.equal(formatAmount(null, 'USD'), 'n/a USD'); // missing is missing, never a fabricated 0.00
+  assert.equal(formatAmount('', 'USD'), 'n/a USD');
+  assert.equal(formatAmount(0, 'USD'), '0.00 USD'); // a real zero still renders
+});
+
+test('buildHeartbeat sections the summary and colors by attention', () => {
+  const calm = buildHeartbeat('Fincore daily: 3 auto-categorized, 0 need your review.\nSnapshot: net worth $10.00, DTI 30.0%.');
+  assert.equal(calm.embeds[0].title, 'Fincore daily');
+  assert.ok(calm.embeds[0].description.startsWith('3 auto-categorized'));
+  assert.ok(calm.embeds[0].description.includes('- Snapshot:'));
+  assert.equal(calm.embeds[0].color, 0x2e8b57);
+
+  const alarmed = buildHeartbeat('Fincore daily: 0 auto-categorized, 0 need your review.\nSTALE FEEDS: bank:1:Checking (9d)');
+  assert.equal(alarmed.embeds[0].color, 0xe0a500);
+
+  // Other jobs keep their own name in the title, and failures read as failures.
+  const backup = buildHeartbeat('Fincore backup FAILED: FINCORE_BACKUP_DIR /mnt/backups does not exist. Is the backup mount down?');
+  assert.equal(backup.embeds[0].title, 'Fincore backup');
+  assert.equal(backup.embeds[0].color, 0xe0a500);
+  assert.ok(backup.embeds[0].description.includes('FAILED'));
 });
 
 test('buildAsk labels deposits as deposits', () => {

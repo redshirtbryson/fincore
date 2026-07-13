@@ -33,6 +33,21 @@ export function catButton(txId, journalId, category, primary = false) {
   };
 }
 
+// Firefly amounts arrive as long-precision strings ('12.340000000000'); render as
+// money, falling back to the raw string when unparseable rather than hiding it.
+export function formatAmount(amount, currency) {
+  // A missing amount must read as missing, not as a fabricated $0.00
+  // (Number(null) and Number('') are both 0).
+  if (amount === null || amount === undefined || String(amount).trim() === '') {
+    return `n/a${currency ? ` ${currency}` : ''}`;
+  }
+  const n = Number(amount);
+  const rendered = Number.isFinite(n)
+    ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : String(amount);
+  return `${rendered}${currency ? ` ${currency}` : ''}`;
+}
+
 export function buildAsk(item, guess) {
   const cats = [guess.category, ...guess.alternatives].filter(
     (c, i, arr) => c && arr.indexOf(c) === i
@@ -54,7 +69,7 @@ export function buildAsk(item, guess) {
     color: 0xe0a500,
     fields: [
       { name: direction, value: (item.merchant || item.description || 'unknown').slice(0, 200), inline: false },
-      { name: 'Amount', value: `${item.amount} ${item.currency}`, inline: true },
+      { name: 'Amount', value: formatAmount(item.amount, item.currency), inline: true },
       { name: 'Date', value: item.date || 'n/a', inline: true },
       { name: 'Account', value: item.account || 'n/a', inline: true },
       { name: 'Best guess', value: `${guess.category} (${Math.round(guess.confidence * 100)}%)`, inline: false },
@@ -68,6 +83,27 @@ export function buildAsk(item, guess) {
   };
 }
 
+// The daily heartbeat as a sectioned embed instead of a wall of bare text. Pure;
+// exported for tests. Lines starting with known prefixes get grouped; the color
+// reflects whether anything needs attention.
+export function buildHeartbeat(text) {
+  const lines = String(text).split('\n').filter((l) => l.trim() !== '');
+  const first = lines.shift() ?? '';
+  const attention = lines.some((l) => /failed|STALE|flag|skipped|drift/i.test(l)) || /failed/i.test(first);
+  // The title comes from the message itself (Fincore daily, Fincore backup, ...);
+  // hardcoding one job's name would mislabel the others' failures.
+  const titleMatch = first.match(/^(Fincore [a-z]+)\b:?\s*/i);
+  const embed = {
+    title: titleMatch ? titleMatch[1] : 'Fincore',
+    description: [titleMatch ? first.slice(titleMatch[0].length) : first, ...lines.map((l) => `- ${l}`)]
+      .filter((l) => l.trim() !== '')
+      .join('\n')
+      .slice(0, 4000),
+    color: attention ? 0xe0a500 : 0x2e8b57,
+  };
+  return { embeds: [embed] };
+}
+
 function send(body) {
   return rest().post(Routes.channelMessages(process.env.DISCORD_FINANCE_CHANNEL_ID), { body });
 }
@@ -77,5 +113,5 @@ export async function sendAsk(item, guess) {
 }
 
 export async function sendHeartbeat(text) {
-  return send({ content: text });
+  return send(buildHeartbeat(text));
 }

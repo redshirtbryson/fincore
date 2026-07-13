@@ -259,6 +259,12 @@ export async function runFreshnessPass(db, { now = new Date() } = {}) {
   accounts.forEach((a, i) => {
     const key = `bank:${a.id}:${a.name}`;
     if (results[i].status === 'fulfilled') {
+      // An account with no transaction EVER is not feed-backed (manual assets like
+      // a cash wallet or the Pokemon collection): there is nothing to be stale
+      // about, so it is skipped rather than alarming as never-seen forever. A real
+      // bank feed acquires transactions on its first import, so a feed that dies
+      // later still ages out through the threshold.
+      if (results[i].value === null) return;
       feeds.push({ name: key, lastActivity: results[i].value });
     } else {
       fetchFailed.push({ name: key, reason: results[i].reason?.message || 'fetch failed' });
