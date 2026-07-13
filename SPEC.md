@@ -1,10 +1,12 @@
 # Fincore: Personal Financial Assistant
 
-## Claude Code Handoff Spec (v4.3)
+## Claude Code Handoff Spec (v4.4)
 
 Owner: Bryson
 Prepared for: Claude Code
 Style rule for all generated docs and code comments: plain prose, no em-dashes.
+
+Changelog v4.4 (automation requirement): Schwab's Trader API expires refresh tokens every 7 days, which made net worth depend on a weekly manual re-auth. Decided: net worth takes Schwab BALANCES from the SimpleFIN balance oracle like every other oracle account (fully automated); the Trader API sidecar provides position-level detail for the Phase 11 analytics only, is excluded from the net worth sum, and a lapsed token pauses analysis without staling the headline number. Sections 10.11, 19, and 20 updated accordingly.
 
 Changelog v4.3 (deploy findings): amended section 19 with the SimpleFIN balance oracle: investment-ish accounts the Bridge can see but that must not live in Firefly (Empower 401k, Coinbase) get daily account-level balance snapshots into fincore.db's `account_valuations`, summed into net worth with as-of staleness checks. Recorded that the 401k lives at Empower (balances only; contributions arrive via the paystub template, SPEC 21 question 5 answered). Manual Firefly accounts remain only for the truly unconnectable (Pokemon collection). Also recorded: Firefly ships EUR default and account currencies must be fixed to USD at setup, and SimpleFIN's ~24 requests/day budget shapes all integrations to one fetch per day.
 
@@ -398,10 +400,10 @@ Tests are money-grade and written with each engine, not deferred.
 Completeness. Net worth and advice are only as good as what is tracked. Three containers, chosen by what the value is:
 
 - Firefly accounts: cash and debt, whether feed-imported or manual (cash on hand, PayPal or Venmo, an off-feed loan like Affirm). Balances derive from transactions, so anything whose value moves without transactions does not belong here.
-- The SimpleFIN balance oracle (amended 2026-07-13): accounts the Bridge can see whose market value moves without transactions, e.g. the Empower 401k and Coinbase. Connected in the Bridge but never mapped by the importer; a daily balances-only fetch writes account-level snapshots to `account_valuations` in fincore.db, and the net worth engine sums the latest snapshot per account with an as-of staleness check. Opt-in by match rule so an importer-mapped account can never double-count.
+- The SimpleFIN balance oracle (amended 2026-07-13): accounts the Bridge can see whose market value moves without transactions, e.g. Schwab, the Empower 401k, and Coinbase. Connected in the Bridge but never mapped by the importer; a daily balances-only fetch writes account-level snapshots to `account_valuations` in fincore.db, and the net worth engine sums the latest snapshot per account with an as-of staleness check. Opt-in by match rule so an importer-mapped account can never double-count.
 - Manual Firefly asset accounts, updated on instruction, only for what nothing can see: the Pokemon card collection and similar private holdings, with a revaluation cadence.
 
-Schwab stays symbol-level in the `positions` store (section 10.11); it never flows through SimpleFIN or Firefly.
+Schwab balances flow through the oracle like every other investment account (fully automated). The Trader API additionally feeds symbol-level detail into the `positions` store (section 10.11) for analytics only; it is excluded from the net worth sum so its weekly-expiring token can never stale the headline number.
 
 Correctness. Money-grade unit tests for every engine (debt, cash-flow, allocation, tax, paystub, net-worth and DTI, reconciliation, outcomes attribution) and regression tests for the categorizer. Wrong financial math is worse than none. Built alongside each engine.
 
@@ -415,7 +417,7 @@ Foundation:
 - Transaction identity and rewrites. A transaction's identity is its Firefly id; the `ai-categorized` tag and stored category live on it. When an import updates an existing transaction, re-evaluate only on a material change (amount, or description past a similarity threshold, for example a resolved merchant name). Leave a note when the system changes its own prior categorization. Never overwrite a hand-confirmed category; user confirmations always win.
 - Baseline lock. The baseline does not lock at the end of onboarding. It locks only after Bryson explicitly confirms accounts, debts with APRs, and manual assets are all in. A one-time 30-day correction window lets a later-found account retroactively adjust the baseline rather than appear as a fake gain. Frozen after the window.
 - Time zone and periods. Everything uses America/New_York. A day rolls at local midnight, a month is the calendar month in local time, a week is Monday to Sunday (matching the Sunday P&L), quarterly tax dates follow the IRS calendar.
-- Investment value ownership. Investment-ish value never enters Firefly. Schwab-held value comes only from the Schwab API into the `positions` store (symbol-level). Non-Schwab investment-ish accounts (Empower 401k, Coinbase) come only from the SimpleFIN balance oracle into `account_valuations` (account-level, daily, amended 2026-07-13); they are connected in the Bridge but never importer-mapped. The net-worth engine sums Firefly balances plus positions plus latest valuations with no overlap by construction. Paystub retirement contributions reconcile against the 401k valuation series rather than being added on top. The 401k lives at Empower (SPEC 21 question 5: answered).
+- Investment value ownership. Investment-ish value never enters Firefly. ALL investment account balances (Schwab, Empower 401k, Coinbase) come from the SimpleFIN balance oracle into `account_valuations` (account-level, daily, fully automated); they are connected in the Bridge but never importer-mapped. The net-worth engine sums Firefly balances plus latest valuations with no overlap by construction. The Schwab Trader API feeds the `positions` store (symbol-level) as ANALYTICS DETAIL only, excluded from the net worth sum, because its refresh token expires weekly and the headline number must never depend on a manual ritual (amended 2026-07-13). Paystub retirement contributions reconcile against the 401k valuation series rather than being added on top. The 401k lives at Empower (SPEC 21 question 5: answered).
 - DTI numerator and the liability-terms convention. Back-end DTI includes the housing obligation (mortgage payment or rent). Firefly liability accounts have no native minimum-payment field, so debt terms (minimum payment, and rent or similar recurring non-debt obligations that belong in the DTI numerator) live in an `obligations` table in `fincore.db` keyed by Firefly account id where one applies, seeded at onboarding and edited via confirmed writes. APR stays on the Firefly liability.
 - DTI income basis with partial history. The trailing 12-month average uses available history seeded with onboarding-declared amounts until 12 real months accrue; any figure computed on a shorter basis says so.
 

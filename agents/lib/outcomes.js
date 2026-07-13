@@ -70,13 +70,15 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
   }
   touchFeed(db, 'firefly');
 
+  // Net worth sums Firefly accounts plus oracle valuations ONLY. Schwab balances
+  // arrive through the oracle (zero-maintenance SimpleFIN feed); the positions
+  // store is analytics enrichment (Phase 11: TLH, drift, concentration) whose
+  // weekly-expiring Trader API token must never be able to stale the headline
+  // number. Positions are therefore deliberately NOT passed into the sum.
   const latestAsOf = db.prepare('SELECT MAX(as_of) AS asOf FROM positions').get()?.asOf || null;
-  const positions = latestAsOf
-    ? db.prepare('SELECT symbol, market_value AS marketValue FROM positions WHERE as_of = ?').all(latestAsOf)
-    : [];
   const { current: valuations, retired } = partitionValuations(latestValuations(db), { now });
 
-  const nw = computeNetWorth({ accounts: allAccounts, positions, valuations });
+  const nw = computeNetWorth({ accounts: allAccounts, valuations });
   for (const v of retired) {
     nw.flags.push(
       `valuation "${v.accountName}" retired from net worth: no data since ${v.asOf} (over ${VALUATION_RETIRE_DAYS} days). Reconnect the feed or remove its match rule.`
@@ -84,13 +86,12 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
   }
 
   const stale = staleFeeds(db);
-  // Positions and valuations carry their own as-of dates; old marks must not be
-  // presented as current net worth without saying so. Unparseable counts as stale
-  // (fail closed).
+  // Positions staleness is an ANALYTICS freshness signal (advice over old marks),
+  // not a net worth problem; it reports as such. Unparseable fails closed.
   if (latestAsOf) {
     const t = parseStoreTimestamp(latestAsOf);
     if (Number.isNaN(t) || t < now.getTime() - STALE_AFTER_DAYS * 86400000) {
-      stale.push(`schwab-positions (as of ${latestAsOf})`);
+      stale.push(`schwab-positions/analytics-only (as of ${latestAsOf})`);
     }
   }
   for (const v of valuations) {
@@ -139,7 +140,6 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
         balance: a.currentBalance,
         included: a.includeNetWorth !== false && a.active !== false,
       })),
-      positionsCount: positions.length,
       positionsAsOf: latestAsOf,
       valuations: valuations.map((v) => ({ name: v.accountName, balance: v.balance, asOf: v.asOf })),
       obligations,
@@ -192,7 +192,7 @@ export function money(v) {
 export function formatOutcome(outcome) {
   const lines = [];
   const nw = outcome.netWorth;
-  lines.push(`Net worth: ${money(nw.netWorth)} (assets ${money(nw.assetsTotal)}, liabilities ${money(nw.liabilitiesTotal)}, positions ${money(nw.positionsTotal)}, valuations ${money(nw.valuationsTotal)})`);
+  lines.push(`Net worth: ${money(nw.netWorth)} (assets ${money(nw.assetsTotal)}, liabilities ${money(nw.liabilitiesTotal)}, valuations ${money(nw.valuationsTotal)})`);
   const d = outcome.dti;
   lines.push(
     d.dti === null

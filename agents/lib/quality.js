@@ -403,9 +403,15 @@ export async function runSchwabPass(db, { now = new Date() } = {}) {
   if (payload.ok !== true) {
     recordFeedStatus(db, 'schwab', { lastSeen: null, status: 'stale' });
     if (payload.tokenExpired) {
-      const msg = 'Schwab token missing or expired; run: npm run schwab-auth (tokens expire weekly)';
-      queueNotification(db, 'confirm', msg);
-      return { ingested: 0, flags: [msg, ...flags], line: '', enabled: true };
+      // Analytics-only inconvenience, deliberately NOT a confirm-queue item: net
+      // worth flows through the oracle, so a lapsed weekly token pauses position
+      // detail (Phase 11 analysis) and nothing else.
+      return {
+        ingested: 0,
+        flags: ['Schwab analytics token expired (net worth unaffected; positions detail paused). Renew when convenient: npm run schwab-auth', ...flags],
+        line: '',
+        enabled: true,
+      };
     }
     return { ingested: 0, flags, line: '', enabled: true };
   }

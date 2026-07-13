@@ -1,12 +1,15 @@
 // Net worth engine: pure, deterministic, unit-tested. No I/O, no model.
 //
 // Net worth = Firefly account balances (assets positive, liabilities negative)
-// + Schwab positions market value + oracle account valuations. Manual assets are
-// Firefly manual accounts, so they arrive through the accounts input; investment
-// value arrives ONLY through positions (Schwab, symbol-level) and valuations
-// (SimpleFIN balance oracle, account-level, SPEC 19 as amended 2026-07-13). No
-// overlap by construction: an oracle-tracked account never exists in Firefly.
-// Dirty inputs are flagged, never guessed around (SPEC section 11).
+// + oracle account valuations. Manual assets are Firefly manual accounts, so they
+// arrive through the accounts input; ALL investment value (Schwab included)
+// arrives through valuations (SimpleFIN balance oracle, account-level, zero
+// token maintenance). The positions input remains supported for callers that
+// want symbol-level sums, but the outcomes layer deliberately does not pass it:
+// positions are Trader API analytics detail whose weekly-expiring token must
+// never stale the headline number. No overlap by construction: an oracle-tracked
+// account never exists in Firefly. Dirty inputs are flagged, never guessed
+// around (SPEC section 11).
 
 // accounts: [{ id, name, type: 'asset'|'liability'|..., currentBalance, currencyCode,
 //              includeNetWorth, active }]
