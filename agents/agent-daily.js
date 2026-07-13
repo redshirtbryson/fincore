@@ -187,9 +187,11 @@ async function dailyStoreLines() {
     }
 
     if (baselineLocked) {
+      let fireflyNetWorth = null;
       try {
         const outcome = await mods.outcomes.snapshot(db, { actor: 'agent-daily' });
         computedNetWorth = outcome.netWorth.netWorth;
+        fireflyNetWorth = outcome.fireflyNetWorth;
         const { money } = mods.outcomes;
         const dti = outcome.dti.dti;
         let line = `Snapshot: net worth ${money(computedNetWorth)}, DTI ${dti === null ? 'n/a' : `${(dti * 100).toFixed(1)}%`}${outcome.dti.partial ? ' (partial basis)' : ''}.`;
@@ -202,7 +204,9 @@ async function dailyStoreLines() {
 
       if (quality) {
         try {
-          const r = await quality.runReconcilePass(db, { computedNetWorth, deposits });
+          // Reconcile over the Firefly-scope figure only: Firefly's own summary can
+          // never include Schwab positions or oracle valuations.
+          const r = await quality.runReconcilePass(db, { computedNetWorth: fireflyNetWorth, deposits });
           lines.push(...r.lines);
           quality.surfaceFlags(lines, 'Reconcile', r.flags);
         } catch (e) {

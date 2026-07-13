@@ -187,6 +187,23 @@ const MIGRATIONS = [
     delivered_at TEXT
   );
   `,
+  // v2: account-level balance snapshots from external oracles (SPEC 19 as amended
+  // 2026-07-13): investment-ish accounts that must not live in Firefly (Empower
+  // 401k, Coinbase) get daily balances via the SimpleFIN balance oracle; Schwab
+  // stays symbol-level in positions. Net worth sums the latest valuation per account.
+  `
+  CREATE TABLE account_valuations (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    account_name TEXT NOT NULL,
+    currency TEXT,
+    balance REAL,
+    as_of TEXT NOT NULL,
+    created TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (source, account_id, as_of)
+  );
+  `,
 ];
 
 export function openStore(dbPath = process.env.FINCORE_DB_PATH || DEFAULT_PATH) {
@@ -425,14 +442,50 @@ export function touchFeed(db, feed, { status = 'ok' } = {}) {
   ).run(feed, status);
 }
 
+// --- account valuations (the balance-oracle layer) ---
+
+export function upsertValuation(db, { source, accountId, accountName, currency, balance, asOf }) {
+  db.prepare(
+    `INSERT INTO account_valuations (source, account_id, account_name, currency, balance, as_of)
+     VALUES (@source, @accountId, @accountName, @currency, @balance, @asOf)
+     ON CONFLICT(source, account_id, as_of) DO UPDATE SET
+       account_name = excluded.account_name,
+       currency = excluded.currency,
+       balance = excluded.balance`
+  ).run({ source, accountId, accountName, currency: currency ?? null, balance, asOf });
+}
+
+// Latest snapshot per tracked account, whatever day it arrived; the caller judges
+// whether that as_of is fresh enough to present as current.
+export function latestValuations(db) {
+  return db
+    .prepare(
+      `SELECT v.source, v.account_id AS accountId, v.account_name AS accountName,
+              v.currency, v.balance, v.as_of AS asOf
+       FROM account_valuations v
+       JOIN (
+         SELECT source, account_id, MAX(as_of) AS max_as_of
+         FROM account_valuations GROUP BY source, account_id
+       ) latest ON latest.source = v.source AND latest.account_id = v.account_id
+              AND latest.max_as_of = v.as_of
+       ORDER BY v.account_name`
+    )
+    .all();
+}
+
 // Record a feed's true upstream freshness: last_seen is the newest DATA seen from
 // it (e.g. latest imported transaction date), status is the freshness verdict the
 // engine computed. Distinct from touchFeed, which records only that we talked to
 // an API just now.
 export function recordFeedStatus(db, feed, { lastSeen = null, status = 'ok' } = {}) {
+  // COALESCE keeps the previous last_seen when a bad day passes null: "when data
+  // last arrived" must survive days when none does.
   db.prepare(
     `INSERT INTO feed_freshness (feed, last_seen, status, updated)
      VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(feed) DO UPDATE SET last_seen = excluded.last_seen, status = excluded.status, updated = datetime('now')`
+     ON CONFLICT(feed) DO UPDATE SET
+       last_seen = COALESCE(excluded.last_seen, feed_freshness.last_seen),
+       status = excluded.status,
+       updated = datetime('now')`
   ).run(feed, lastSeen, status);
 }

@@ -5,7 +5,8 @@ import * as firefly from './firefly.js';
 import { matchTransfers, matchReimbursements, parseAmount } from './matching.js';
 import { assessFreshness, staleSummaryLine } from './freshness.js';
 import { reconcileNetWorth, reconcilePaystubDeposits } from './reconcile.js';
-import { audit, reversalHandleFor, latestPaystub, recordFeedStatus, getPref } from './store.js';
+import { audit, reversalHandleFor, latestPaystub, recordFeedStatus, getPref, getMeta, upsertValuation } from './store.js';
+import { fetchBalances, normalizeValuation, matchesValuationRule, parseMatchRules, overlapsFireflyAccount } from './simplefin.js';
 
 const MATCH_LOOKBACK_DAYS = Number(process.env.MATCH_LOOKBACK_DAYS) > 0 ? Number(process.env.MATCH_LOOKBACK_DAYS) : 90;
 const MATCH_WRITE_CAP = Number(process.env.MATCH_WRITE_CAP) > 0 ? Number(process.env.MATCH_WRITE_CAP) : 20;
@@ -286,6 +287,91 @@ export async function runFreshnessPass(db, { now = new Date() } = {}) {
   return { assessment, line: staleSummaryLine(assessment), flags: assessment.flags };
 }
 
+// SimpleFIN balance oracle (SPEC 19 as amended): daily balance snapshots for
+// Bridge-connected accounts matched by VALUATION_ACCOUNT_MATCH that deliberately
+// never exist in Firefly. Off when fully unconfigured; a HALF-configuration is
+// almost certainly a mistake and is flagged.
+export async function runValuationPass(db, { now = new Date() } = {}) {
+  const rules = parseMatchRules(process.env.VALUATION_ACCOUNT_MATCH);
+  const hasUrl = Boolean(process.env.SIMPLEFIN_ACCESS_URL);
+  if (!hasUrl && rules.length === 0) {
+    return { ingested: 0, flags: [], line: '', enabled: false };
+  }
+  if (!hasUrl || rules.length === 0) {
+    return {
+      ingested: 0,
+      flags: [
+        `valuation oracle half-configured: ${hasUrl ? 'VALUATION_ACCOUNT_MATCH is empty' : 'SIMPLEFIN_ACCESS_URL is not set'}; oracle is OFF`,
+      ],
+      line: '',
+      enabled: false,
+    };
+  }
+
+  const [accounts, fireflyAssets, fireflyLiabilities] = await Promise.all([
+    fetchBalances(),
+    firefly.getAccounts('asset'),
+    firefly.getAccounts('liabilities'),
+  ]);
+  const fireflyNames = [...fireflyAssets, ...fireflyLiabilities].map((a) => a.name);
+
+  const flags = [];
+  let matched = 0;
+  let ingested = 0;
+  for (const account of accounts) {
+    if (!matchesValuationRule(account, rules)) continue;
+    matched += 1;
+    const r = normalizeValuation(account, { nowMs: now.getTime() });
+    if (r.error) {
+      flags.push(r.error);
+      continue;
+    }
+    // Double-count tripwire: a matched Bridge account overlapping a Firefly account
+    // name is probably importer-mapped; ingesting it would count it twice.
+    const overlap = overlapsFireflyAccount(r.valuation.accountName, fireflyNames);
+    if (overlap) {
+      flags.push(
+        `valuation "${r.valuation.accountName}" overlaps Firefly account "${overlap}"; NOT ingested (possible double-count). Tighten VALUATION_ACCOUNT_MATCH or rename one.`
+      );
+      continue;
+    }
+    // Measurement-change guard: a brand-new valuation account after the baseline is
+    // locked moves net worth without any real gain. Ingest it (the data is real)
+    // but surface it loudly so the baseline gets corrected inside the window.
+    const isNew = !db
+      .prepare('SELECT 1 FROM account_valuations WHERE source = ? AND account_id = ? LIMIT 1')
+      .get(r.valuation.source, r.valuation.accountId);
+    if (isNew && getMeta(db, 'baseline_locked_at')) {
+      const msg = `new valuation account "${r.valuation.accountName}" adds ${r.valuation.balance.toFixed(2)} to net worth AFTER the baseline lock; correct the baseline (npm run onboard) inside the window or this reads as a gain`;
+      flags.push(msg);
+      queueNotification(db, 'confirm', msg);
+    }
+    upsertValuation(db, r.valuation);
+    ingested += 1;
+  }
+
+  if (ingested === 0) {
+    flags.push(
+      matched === 0
+        ? `valuation oracle matched no Bridge accounts for rules "${rules.join(', ')}"; connect the accounts in the Bridge or fix VALUATION_ACCOUNT_MATCH`
+        : `valuation oracle matched ${matched} account(s) but none had a usable balance today`
+    );
+  }
+  // Feed status reflects whether DATA landed, not whether the request succeeded.
+  // lastSeen passes null on a bad day so the previous good date is preserved.
+  recordFeedStatus(db, 'simplefin-oracle', {
+    lastSeen: ingested > 0 ? firefly.nyDateStr(now) : null,
+    status: ingested > 0 ? 'ok' : 'stale',
+  });
+
+  return {
+    ingested,
+    flags,
+    line: ingested > 0 ? `Valuations: ${ingested} account balance${ingested === 1 ? '' : 's'} ingested.` : '',
+    enabled: true,
+  };
+}
+
 // Reconciliation: our computed net worth against Firefly's own summary figure, and
 // observed payroll deposits against the in-effect paystub template (the re-upload
 // trigger from SPEC 10.9). Cannot-reconcile is a reported state, never silence.
@@ -346,6 +432,14 @@ export async function runPreSnapshotPasses(db, { matchingEnabled = true } = {}) 
     surfaceFlags(lines, 'Freshness', f.flags);
   } catch (e) {
     lines.push(`Freshness pass failed: ${e.message}`);
+  }
+
+  try {
+    const v = await runValuationPass(db);
+    if (v.line) lines.push(v.line);
+    surfaceFlags(lines, 'Valuations', v.flags);
+  } catch (e) {
+    lines.push(`Valuation pass failed: ${e.message}`);
   }
 
   return { lines, deposits };

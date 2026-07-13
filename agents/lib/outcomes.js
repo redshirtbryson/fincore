@@ -4,13 +4,32 @@
 import * as firefly from './firefly.js';
 import { computeNetWorth } from './networth.js';
 import { computeDTI, monthlyGrossForSource } from './dti.js';
-import { upsertSeriesRow, touchFeed, audit, getMeta, latestPaystub } from './store.js';
+import { upsertSeriesRow, touchFeed, audit, getMeta, latestPaystub, latestValuations } from './store.js';
 
 // Feeds older than this are stale: figures computed over them must say so
 // rather than being presented as current (SPEC section 11). Phase 4 extends this
 // beyond API reachability to true upstream freshness (last-imported-transaction
 // recency per bank feed); the shape here is what it builds on.
 const STALE_AFTER_DAYS = 3;
+
+// A valuation without fresh data eventually RETIRES from the sum entirely: a
+// disconnected or sold-off account must not ride its last mark forever. Between
+// STALE_AFTER_DAYS and here it is summed but flagged stale; past here it is
+// excluded with a loud flag.
+const VALUATION_RETIRE_DAYS = 14;
+
+// Pure partition, exported for tests.
+export function partitionValuations(valuations, { now, retireAfterDays = VALUATION_RETIRE_DAYS } = {}) {
+  const current = [];
+  const retired = [];
+  const cutoff = now.getTime() - retireAfterDays * 86400000;
+  for (const v of valuations) {
+    const t = parseStoreTimestamp(v.asOf);
+    if (Number.isNaN(t) || t < cutoff) retired.push(v);
+    else current.push(v);
+  }
+  return { current, retired };
+}
 
 function parseStoreTimestamp(ts) {
   if (!ts) return NaN;
@@ -55,16 +74,29 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
   const positions = latestAsOf
     ? db.prepare('SELECT symbol, market_value AS marketValue FROM positions WHERE as_of = ?').all(latestAsOf)
     : [];
+  const { current: valuations, retired } = partitionValuations(latestValuations(db), { now });
 
-  const nw = computeNetWorth({ accounts: allAccounts, positions });
+  const nw = computeNetWorth({ accounts: allAccounts, positions, valuations });
+  for (const v of retired) {
+    nw.flags.push(
+      `valuation "${v.accountName}" retired from net worth: no data since ${v.asOf} (over ${VALUATION_RETIRE_DAYS} days). Reconnect the feed or remove its match rule.`
+    );
+  }
 
   const stale = staleFeeds(db);
-  // Positions carry their own as-of date; old marks must not be presented as
-  // current net worth without saying so. Unparseable counts as stale (fail closed).
+  // Positions and valuations carry their own as-of dates; old marks must not be
+  // presented as current net worth without saying so. Unparseable counts as stale
+  // (fail closed).
   if (latestAsOf) {
     const t = parseStoreTimestamp(latestAsOf);
     if (Number.isNaN(t) || t < now.getTime() - STALE_AFTER_DAYS * 86400000) {
       stale.push(`schwab-positions (as of ${latestAsOf})`);
+    }
+  }
+  for (const v of valuations) {
+    const t = parseStoreTimestamp(v.asOf);
+    if (Number.isNaN(t) || t < now.getTime() - STALE_AFTER_DAYS * 86400000) {
+      stale.push(`valuation:${v.accountName} (as of ${v.asOf})`);
     }
   }
 
@@ -92,6 +124,10 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
 
   return {
     netWorth: nw,
+    // Firefly-scope figure for reconciliation: Firefly's own summary can never
+    // include positions or oracle valuations, so drift is only meaningful over
+    // the accounts both sides can see.
+    fireflyNetWorth: nw.netWorth === null ? null : nw.assetsTotal + nw.liabilitiesTotal,
     dti: dtiResult,
     stale,
     flags: [...nw.flags, ...dtiResult.flags],
@@ -105,6 +141,7 @@ export async function computeOutcomes(db, { accounts = null, now = new Date() } 
       })),
       positionsCount: positions.length,
       positionsAsOf: latestAsOf,
+      valuations: valuations.map((v) => ({ name: v.accountName, balance: v.balance, asOf: v.asOf })),
       obligations,
       incomes,
     },
@@ -155,7 +192,7 @@ export function money(v) {
 export function formatOutcome(outcome) {
   const lines = [];
   const nw = outcome.netWorth;
-  lines.push(`Net worth: ${money(nw.netWorth)} (assets ${money(nw.assetsTotal)}, liabilities ${money(nw.liabilitiesTotal)}, positions ${money(nw.positionsTotal)})`);
+  lines.push(`Net worth: ${money(nw.netWorth)} (assets ${money(nw.assetsTotal)}, liabilities ${money(nw.liabilitiesTotal)}, positions ${money(nw.positionsTotal)}, valuations ${money(nw.valuationsTotal)})`);
   const d = outcome.dti;
   lines.push(
     d.dti === null
