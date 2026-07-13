@@ -24,3 +24,8 @@ weekly-trend.csv
 # os / editor
 .DS_Store
 *.swp
+
+# python
+schwab/.venv/
+__pycache__/
+*.pyc

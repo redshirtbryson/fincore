@@ -9,6 +9,7 @@
     "bot": "node discord-bot.js",
     "onboard": "node onboard.js",
     "snapshot": "node snapshot.js",
+    "schwab-auth": "node schwab-auth.js",
     "health": "node -e \"import('./lib/firefly.js').then(m=>m.about()).then(v=>console.log(v)).catch(e=>{console.error(e);process.exit(1)})\"",
     "test": "node --test test/"
   },

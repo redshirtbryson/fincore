@@ -29,6 +29,19 @@ Three more pure engines protect the headline numbers, orchestrated by `lib/quali
 
 Calibration note: the matcher ships conservative and untuned. After the 90-day backfill, review the ambiguous counts and the `transfer-match` results against real SimpleFIN data before widening any window or tolerance.
 
+## Schwab positions (Phase 11 data path)
+
+Read-only positions and balances into net worth, via a Python sidecar (`../schwab/`) that owns OAuth with schwab-py (never hand-roll bank OAuth). Setup on the PM2 host:
+
+```
+python3 -m venv ../schwab/.venv
+../schwab/.venv/bin/pip install -r ../schwab/requirements.txt
+# fill SCHWAB_APP_KEY / SCHWAB_APP_SECRET in .env, then:
+npm run schwab-auth        # interactive; opens a browser for the OAuth dance
+```
+
+Schwab expires refresh tokens every 7 days, so `npm run schwab-auth` is a weekly ritual (do it from a machine with a browser; the token file lands at `SCHWAB_TOKEN_PATH`). The daily run ingests positions into the `positions` table (replace-by-day) and a lapsed token surfaces in the heartbeat with the exact command to run, plus a stale `schwab` feed, never a silently frozen number. The analytics layer (allocation drift, TLH candidates, concentration) is the rest of Phase 11 and comes later.
+
 ## Backups (Phase 4)
 
 - `fincore-backup` (PM2 cron, daily 6:30): copies fincore.db to `FINCORE_BACKUP_DIR` via the SQLite online backup API, verifies integrity, rotates to `FINCORE_BACKUP_KEEP` copies. Point the directory off this host.

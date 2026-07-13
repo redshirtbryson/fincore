@@ -378,6 +378,49 @@ export async function runValuationPass(db, { now = new Date() } = {}) {
   };
 }
 
+// Schwab positions ingest (Phase 11's data path, SPEC 10.11): the Python sidecar
+// owns OAuth via schwab-py; this pass invokes it, normalizes, and replaces today's
+// positions rows. Off when SCHWAB_APP_KEY is unset. Schwab refresh tokens expire
+// weekly; a token failure surfaces as an actionable flag plus a stale feed, never
+// a silent freeze.
+export async function runSchwabPass(db, { now = new Date() } = {}) {
+  if (!process.env.SCHWAB_APP_KEY) return { ingested: 0, flags: [], line: '', enabled: false };
+  const schwab = await import('./schwab.js');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const scriptPath = path.join(here, '..', '..', 'schwab', 'fetch_positions.py');
+  const venvPython = path.join(here, '..', '..', 'schwab', '.venv', 'bin', 'python');
+  const fs = await import('node:fs');
+  const pythonBin = process.env.SCHWAB_PYTHON || (fs.existsSync(venvPython) ? venvPython : 'python3');
+
+  const payload = await schwab.fetchSchwabPayload({ pythonBin, scriptPath });
+  const { positions, flags } = schwab.normalizeSchwabPayload(payload);
+
+  // Success/failure is judged on the FETCH, not the row count: a legitimately
+  // empty account is a true zero snapshot that must be recorded (and must stop
+  // yesterday's rows from being presented as the latest state).
+  if (payload.ok !== true) {
+    recordFeedStatus(db, 'schwab', { lastSeen: null, status: 'stale' });
+    if (payload.tokenExpired) {
+      const msg = 'Schwab token missing or expired; run: npm run schwab-auth (tokens expire weekly)';
+      queueNotification(db, 'confirm', msg);
+      return { ingested: 0, flags: [msg, ...flags], line: '', enabled: true };
+    }
+    return { ingested: 0, flags, line: '', enabled: true };
+  }
+
+  const asOf = firefly.nyDateStr(now);
+  const count = schwab.ingestPositions(db, positions, asOf);
+  recordFeedStatus(db, 'schwab', { lastSeen: asOf, status: 'ok' });
+  return {
+    ingested: count,
+    flags,
+    line: `Schwab: ${count === 0 ? 'accounts fetched, nothing to ingest' : `${count} position${count === 1 ? '' : 's'} ingested`}.`,
+    enabled: true,
+  };
+}
+
 // Reconciliation: our computed net worth against Firefly's own summary figure, and
 // observed payroll deposits against the in-effect paystub template (the re-upload
 // trigger from SPEC 10.9). Cannot-reconcile is a reported state, never silence.
@@ -446,6 +489,14 @@ export async function runPreSnapshotPasses(db, { matchingEnabled = true } = {}) 
     surfaceFlags(lines, 'Valuations', v.flags);
   } catch (e) {
     lines.push(`Valuation pass failed: ${e.message}`);
+  }
+
+  try {
+    const s = await runSchwabPass(db);
+    if (s.line) lines.push(s.line);
+    surfaceFlags(lines, 'Schwab', s.flags);
+  } catch (e) {
+    lines.push(`Schwab pass failed: ${e.message}`);
   }
 
   return { lines, deposits };
