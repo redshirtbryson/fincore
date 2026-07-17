@@ -10,12 +10,16 @@ export const CATEGORIES = [
 
 export const CATEGORY_SET = new Set(CATEGORIES);
 
-// Canonical income sources (SPEC section 2) with distinctive tokens for
-// deterministic payer detection in ledger text.
+// Canonical PERSONAL income sources with distinctive tokens for deterministic
+// payer detection in ledger text. Each source may have several tokens because the
+// deposit label rarely matches the friendly name (SPEC section 2, refined
+// 2026-07-17): Redshirt Cloud pays into personal checking under its payroll entity
+// "WV CSP LLC", so that string must map to Redshirt. Neptune Political is NOT a
+// personal income source: it is a client of Redshirt (business-to-business,
+// upstream of the personal account), so it never appears here.
 export const INCOME_SOURCES = [
-  { name: 'Blenko', token: 'blenko' },
-  { name: 'Redshirt Cloud', token: 'redshirt' },
-  { name: 'Neptune Political', token: 'neptune' },
+  { name: 'Blenko', tokens: ['blenko'] },
+  { name: 'Redshirt Cloud', tokens: ['redshirt', 'wv csp', 'csp llc'] },
 ];
 
 export const INCOME_SOURCE_NAMES = new Set(INCOME_SOURCES.map((s) => s.name));
@@ -26,7 +30,7 @@ export const INCOME_SOURCE_NAMES = new Set(INCOME_SOURCES.map((s) => s.name));
 export function detectIncomeSource(...strings) {
   const haystack = strings.filter(Boolean).join(' ').toLowerCase();
   for (const s of INCOME_SOURCES) {
-    if (haystack.includes(s.token)) return s.name;
+    if (s.tokens.some((t) => haystack.includes(t))) return s.name;
   }
   return null;
 }

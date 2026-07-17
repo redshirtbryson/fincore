@@ -39,10 +39,13 @@ test('chunk splits arrays, preserves order, rejects bad sizes', () => {
   assert.throws(() => chunk([1, 2], NaN), RangeError);
 });
 
-test('detectIncomeSource matches known payers only, case-insensitive', () => {
+test('detectIncomeSource matches known payers by any token, case-insensitive', () => {
   assert.equal(detectIncomeSource('BLENKO GLASS CO', 'PAYROLL'), 'Blenko');
   assert.equal(detectIncomeSource('', 'redshirt cloud llc invoice 12'), 'Redshirt Cloud');
-  assert.equal(detectIncomeSource('NEPTUNE POLITICAL'), 'Neptune Political');
+  // Redshirt pays personal checking under its payroll entity "WV CSP LLC".
+  assert.equal(detectIncomeSource('WV CSP LLC PAYROLL'), 'Redshirt Cloud');
+  // Neptune is a client of Redshirt (business, upstream), never a personal source.
+  assert.equal(detectIncomeSource('NEPTUNE POLITICAL'), null);
   assert.equal(detectIncomeSource('CHASE BANK', 'interest payment'), null);
   assert.equal(detectIncomeSource(null, undefined, ''), null);
 });

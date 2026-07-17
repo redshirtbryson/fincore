@@ -68,7 +68,6 @@ async function stepIncomeSources(db) {
   const defaults = [
     { name: 'Blenko', treatment: 'w2' },
     { name: 'Redshirt Cloud', treatment: 'self_employment' },
-    { name: 'Neptune Political', treatment: 'self_employment' },
   ];
   const existing = new Map(db.prepare('SELECT * FROM income_sources').all().map((r) => [r.name, r]));
   const upsert = db.prepare(
