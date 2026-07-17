@@ -6,10 +6,14 @@
 // revenue view, and the withdrawal leg reads as an expense.
 //
 //   node cleanup-transfers.js            DRY RUN: list every pair it would convert
-//   node cleanup-transfers.js apply      convert them (delete deposit leg, convert
-//                                        the withdrawal leg in place to a transfer)
+//   node cleanup-transfers.js apply      convert them (delete deposit leg, then model
+//                                        the survivor: a transfer for an asset
+//                                        destination, a withdrawal into the liability
+//                                        for a card payment)
 //   node cleanup-transfers.js apply 1    convert only the first N pairs (a live test:
 //                                        do one, eyeball it in Firefly, then run the rest)
+//   node cleanup-transfers.js repair     complete pairs whose delete landed but whose
+//                                        leg-convert failed (from the write-ahead audit)
 //
 // Same safety machinery as the daily matcher (lib/quality.js): the conversion, the
 // autonomy verdict, and the multi-split guard are the SAME shared functions, so this
@@ -26,7 +30,7 @@
 import 'dotenv/config';
 import * as firefly from './lib/firefly.js';
 import { matchTransfers, parseAmount } from './lib/matching.js';
-import { autoConvertVerdict, convertPairToTransfer, multiSplitTxIds } from './lib/quality.js';
+import { autoConvertVerdict, convertPairToTransfer, multiSplitTxIds, repairIncompleteConversions } from './lib/quality.js';
 import { openStore } from './lib/store.js';
 
 const LOOKBACK_DAYS = Number(process.env.CLEANUP_LOOKBACK_DAYS) > 0 ? Number(process.env.CLEANUP_LOOKBACK_DAYS) : 400;
@@ -65,10 +69,21 @@ function legacyTaggedPairs(items) {
 }
 
 async function main() {
-  const apply = process.argv[2] === 'apply';
+  const mode = process.argv[2];
+  const apply = mode === 'apply';
   // Optional cap on how many pairs to convert this run, so the first pair can be
   // converted alone and eyeballed in Firefly before committing to the whole batch.
   const limit = Number.isInteger(Number(process.argv[3])) && Number(process.argv[3]) > 0 ? Number(process.argv[3]) : Infinity;
+
+  if (mode === 'repair') {
+    const liabilityIds = new Set((await firefly.getAccounts('liabilities')).map((a) => String(a.id)));
+    const db = openStore();
+    const res = await repairIncompleteConversions(db, { liabilityIds });
+    db.close();
+    for (const f of res.flags) console.log(`flag: ${f}`);
+    console.log(`Repair: ${res.candidates} incomplete conversion(s) found, ${res.repaired} completed, ${res.skipped} still failing.`);
+    return;
+  }
 
   const { items, truncated } = await firefly.getRecentTransactions({
     lookbackDays: LOOKBACK_DAYS,
@@ -144,10 +159,10 @@ async function main() {
   let done = 0;
   for (const m of batch) {
     try {
-      await convertPairToTransfer(db, m, { actor: 'cleanup-transfers' });
+      await convertPairToTransfer(db, m, { actor: 'cleanup-transfers', liabilityIds });
       done += 1;
     } catch (e) {
-      console.error(`FAILED ${pairLine(m)}: ${e.message} -- see the audit log / notification queue; check by hand`);
+      console.error(`FAILED ${pairLine(m)}: ${e.message} -- run "cleanup-transfers.js repair" to complete it`);
     }
   }
   db.close();

@@ -446,23 +446,34 @@ export async function deleteTransaction(id) {
   return api(`/transactions/${id}`, { method: 'DELETE' });
 }
 
-// Convert an existing split into a proper Firefly transfer, in place. A transfer
-// touches both account registers and creates NO expense or revenue account, which
-// is what an internal movement (checking to savings, a card payment) should be.
-// Left as two independent legs (a withdrawal into an expense account plus a deposit
-// out of a revenue account) the same movement double-counts as expense plus income.
+// Re-point one surviving leg so an internal movement stops double-counting. The bank
+// feed produces two independent legs for one movement (a withdrawal into an expense
+// account plus a deposit out of a revenue account); the caller deletes the redundant
+// opposite leg first (conservative order: a mid-flight failure overstates expense, not
+// income) and calls this on the leg that remains.
 //
-// This edits ONE surviving leg rather than delete-both-and-recreate: the caller
-// deletes the redundant opposite leg first (the conservative order, so a mid-flight
-// failure overstates expense rather than income), then converts the leg that
-// remains. destinationId is the own account the money actually landed in.
-export async function convertToTransfer(txId, journalId, { sourceId, destinationId, addTags = [], knownTags = null }) {
+// The correct Firefly modeling depends on where the money landed:
+//   - into an ASSET account (checking->savings): a TRANSFER. Both registers move, no
+//     expense/revenue account, net worth unchanged.
+//   - into a LIABILITY account (a credit-card payment): a WITHDRAWAL whose destination
+//     IS the liability. This Firefly rejects a liability as a transfer destination
+//     ("could not find a valid destination account"), but a withdrawal into the
+//     liability pays the debt down: source asset falls, liability falls, net worth
+//     unchanged, and it is never income. destinationIsLiability selects this.
+// destinationId is the own account the money actually entered; sourceId is the account
+// it left (the surviving withdrawal leg's own account).
+export async function convertInternalLeg(
+  txId,
+  journalId,
+  { sourceId, destinationId, destinationIsLiability = false, addTags = [], knownTags = null }
+) {
+  const wantType = destinationIsLiability ? 'withdrawal' : 'transfer';
   const baseTags = knownTags ?? (await getSplit(txId, journalId))?.tags ?? [];
   const tags = new Set(baseTags);
   for (const t of addTags) tags.add(t);
   const update = {
     transaction_journal_id: String(journalId),
-    type: 'transfer',
+    type: wantType,
     source_id: String(sourceId),
     destination_id: String(destinationId),
     tags: Array.from(tags),
@@ -475,16 +486,14 @@ export async function convertToTransfer(txId, journalId, { sourceId, destination
   const res = await api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
 
   // Read-back verification (money-grade destructive write): a 200 is weaker evidence
-  // than the stored result. Firefly's type conversion has version-specific quirks
-  // (transfer legs must both be asset/liability; some releases re-journal). Confirm
-  // the split is actually a transfer to the intended destination before the caller
-  // counts it done; on mismatch, throw so the caller reports rather than trusts it.
+  // than the stored result. Confirm the split now has the intended type AND destination
+  // before the caller counts it done; on mismatch, throw so the caller reports it.
   const split = await getSplit(txId, journalId);
   const gotType = String(split?.type || '').toLowerCase();
   const gotDest = split?.destination_id != null ? String(split.destination_id) : null;
-  if (gotType !== 'transfer' || gotDest !== String(destinationId)) {
+  if (gotType !== wantType || gotDest !== String(destinationId)) {
     throw new Error(
-      `convertToTransfer verification failed for tx ${txId}/${journalId}: type=${gotType || '(none)'}, destination=${gotDest || '(none)'} (wanted transfer -> ${destinationId})`
+      `convertInternalLeg verification failed for tx ${txId}/${journalId}: type=${gotType || '(none)'}, destination=${gotDest || '(none)'} (wanted ${wantType} -> ${destinationId})`
     );
   }
   return res;

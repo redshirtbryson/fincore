@@ -100,7 +100,7 @@ async function repairHalfMatches(db, txns, flags) {
 const INTERNAL_CATEGORIES = new Set(['Transfer', 'Debt Payment']);
 
 // Set of Firefly transaction (group) ids that carry more than one split in the
-// fetched window. deleteTransaction removes an entire group and convertToTransfer
+// fetched window. deleteTransaction removes an entire group and convertInternalLeg
 // retypes one split, so a leg belonging to a multi-split group cannot be safely
 // converted (it would destroy or mis-type the sibling splits). Sync and CSV rows are
 // single-split; manual entries can be split. Such pairs are queued, never converted.
@@ -169,16 +169,19 @@ export function autoConvertVerdict(m, { multiSplit = new Set(), liabilityIds = n
   return { ok: true };
 }
 
-// Execute a vetted conversion: collapse a withdrawal+deposit leg-pair into one real
-// Firefly transfer. A begin-audit is written BEFORE the destructive delete so a hard
-// crash between the two writes still leaves a durable record of both original legs;
-// the completion audit follows. On failure a durable notification is queued (the
-// in-memory flag alone would not survive a process death) and the error is rethrown
-// for the caller to surface. Order is delete-deposit-then-convert-withdrawal so a
-// mid-flight failure overstates expense, never income. Returns nothing; throws on
-// failure.
-export async function convertPairToTransfer(db, m, { actor }) {
+// Execute a vetted conversion: collapse a withdrawal+deposit leg-pair into one correct
+// internal movement (a transfer for an asset destination, a withdrawal into the
+// liability for a card payment; see firefly.convertInternalLeg). A begin-audit is
+// written BEFORE the destructive delete so a hard crash between the two writes still
+// leaves a durable record of both original legs; the completion audit follows. That
+// begin-without-completion row is also what the `repair` path uses to finish a pair
+// whose convert failed after the delete. On failure a durable notification is queued
+// (an in-memory flag alone would not survive a process death) and the error is
+// rethrown. Order is delete-deposit-then-convert-withdrawal so a mid-flight failure
+// overstates expense, never income. Returns nothing; throws on failure.
+export async function convertPairToTransfer(db, m, { actor, liabilityIds = new Set() }) {
   const tag = `transfer-converted:${m.withdrawal.journal_id}-${m.deposit.journal_id}`;
+  const destinationIsLiability = liabilityIds.has(m.deposit.accountId);
   const before = { withdrawal: legSnapshot(m.withdrawal), deposit: legSnapshot(m.deposit) };
   // Durable write-ahead intent: survives a crash between the delete and the convert.
   audit(db, {
@@ -186,14 +189,15 @@ export async function convertPairToTransfer(db, m, { actor }) {
     action: 'transfer.convert.begin',
     target: `firefly:tx:${m.withdrawal.tx_id}:${m.withdrawal.journal_id}`,
     before,
-    after: { plannedDeleteDepositTx: m.deposit.tx_id, tag },
+    after: { plannedDeleteDepositTx: m.deposit.tx_id, tag, destinationIsLiability },
     reversalHandle: reversalHandleFor('firefly_transfer_convert', tag, before),
   });
   try {
     await firefly.deleteTransaction(m.deposit.tx_id);
-    await firefly.convertToTransfer(m.withdrawal.tx_id, m.withdrawal.journal_id, {
+    await firefly.convertInternalLeg(m.withdrawal.tx_id, m.withdrawal.journal_id, {
       sourceId: m.withdrawal.accountId,
       destinationId: m.deposit.accountId,
+      destinationIsLiability,
       addTags: [tag],
       knownTags: m.withdrawal.tags,
     });
@@ -202,7 +206,7 @@ export async function convertPairToTransfer(db, m, { actor }) {
       db,
       'error',
       `Transfer conversion failed mid-write for ${pairLabel(m.withdrawal, m.deposit)}: ${e.message}. ` +
-        `Deposit leg ${m.deposit.tx_id} may be deleted with withdrawal leg ${m.withdrawal.tx_id} not yet a transfer (overstated expense). Check by hand.`
+        `Deposit leg ${m.deposit.tx_id} may be deleted with withdrawal leg ${m.withdrawal.tx_id} not yet converted (overstated expense). Run "cleanup-transfers.js repair".`
     );
     throw e;
   }
@@ -212,7 +216,8 @@ export async function convertPairToTransfer(db, m, { actor }) {
     target: `firefly:tx:${m.withdrawal.tx_id}:${m.withdrawal.journal_id}`,
     before,
     after: {
-      type: 'transfer',
+      type: destinationIsLiability ? 'withdrawal' : 'transfer',
+      modeledAs: destinationIsLiability ? 'card-payment (withdrawal into liability)' : 'transfer',
       sourceId: m.withdrawal.accountId,
       destinationId: m.deposit.accountId,
       tag,
@@ -221,6 +226,86 @@ export async function convertPairToTransfer(db, m, { actor }) {
     },
     reversalHandle: reversalHandleFor('firefly_transfer_convert', tag, before),
   });
+}
+
+// Complete conversions whose delete succeeded but whose leg-convert failed (e.g. the
+// first run hit Firefly's transfer-to-liability rejection). The write-ahead begin-audit
+// recorded both legs; a matching completion audit means it finished. So any
+// 'transfer.convert.begin' target with no 'transfer.convert' is an orphaned withdrawal
+// leg (its deposit already deleted) still pointing at an expense account. Re-point it
+// with convertInternalLeg using the recorded destination account. Idempotent: a fixed
+// leg (already a transfer, or already pointing at the destination) is skipped, and a
+// success writes the completion audit so it is not selected again. Returns a summary.
+export async function repairIncompleteConversions(db, { actor = 'cleanup-transfers', liabilityIds = new Set() } = {}) {
+  const rows = db
+    .prepare(
+      `SELECT target, before_json FROM audit_log
+       WHERE action = 'transfer.convert.begin'
+         AND target NOT IN (SELECT target FROM audit_log WHERE action = 'transfer.convert')
+       ORDER BY id`
+    )
+    .all();
+
+  let repaired = 0;
+  let skipped = 0;
+  const flags = [];
+  for (const row of rows) {
+    let before;
+    try {
+      before = JSON.parse(row.before_json);
+    } catch {
+      flags.push(`repair: could not parse before_json for ${row.target}`);
+      continue;
+    }
+    const w = before?.withdrawal;
+    const d = before?.deposit;
+    if (!w?.tx_id || !w?.journal_id || !w?.accountId || !d?.accountId) {
+      flags.push(`repair: incomplete snapshot for ${row.target}; skipped`);
+      continue;
+    }
+    const destinationIsLiability = liabilityIds.has(d.accountId);
+    const tag = `transfer-converted:${w.journal_id}-${d.journal_id}`;
+    try {
+      // Idempotency: if the leg is already converted (a transfer, or a withdrawal
+      // already pointing at the destination), record completion and move on.
+      const split = await firefly.getSplit(w.tx_id, w.journal_id);
+      const curType = String(split?.type || '').toLowerCase();
+      const curDest = split?.destination_id != null ? String(split.destination_id) : null;
+      const already =
+        (destinationIsLiability && curType === 'withdrawal' && curDest === String(d.accountId)) ||
+        (!destinationIsLiability && curType === 'transfer' && curDest === String(d.accountId));
+      if (!already) {
+        await firefly.convertInternalLeg(w.tx_id, w.journal_id, {
+          sourceId: w.accountId,
+          destinationId: d.accountId,
+          destinationIsLiability,
+          addTags: [tag],
+          knownTags: Array.isArray(w.tags) ? w.tags : null,
+        });
+      }
+      audit(db, {
+        actor,
+        action: 'transfer.convert',
+        target: row.target,
+        before,
+        after: {
+          type: destinationIsLiability ? 'withdrawal' : 'transfer',
+          modeledAs: destinationIsLiability ? 'card-payment (withdrawal into liability)' : 'transfer',
+          sourceId: w.accountId,
+          destinationId: d.accountId,
+          tag,
+          repaired: true,
+          deletedDepositTx: d.tx_id,
+        },
+        reversalHandle: reversalHandleFor('firefly_transfer_convert', tag, before),
+      });
+      repaired += 1;
+    } catch (e) {
+      skipped += 1;
+      flags.push(`repair: failed to complete ${row.target}: ${e.message}`);
+    }
+  }
+  return { candidates: rows.length, repaired, skipped, flags };
 }
 
 const SYNC_LOOKBACK_DAYS = Number(process.env.SYNC_LOOKBACK_DAYS) > 0 ? Number(process.env.SYNC_LOOKBACK_DAYS) : 3;
@@ -362,7 +447,7 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
       continue;
     }
     try {
-      await convertPairToTransfer(db, m, { actor: 'matcher' });
+      await convertPairToTransfer(db, m, { actor: 'matcher', liabilityIds });
       claimed.add(m.withdrawal.journal_id);
       claimed.add(m.deposit.journal_id);
       written += 1;
