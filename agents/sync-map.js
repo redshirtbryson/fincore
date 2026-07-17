@@ -1,6 +1,8 @@
 // SimpleFIN-to-Firefly account map management for the sync pass.
 //
 //   node sync-map.js                      show the current map and unmapped Bridge accounts
+//   node sync-map.js auto                 DRY RUN: match live Bridge accounts to Firefly by name
+//   node sync-map.js auto apply           write the auto-matched map
 //   node sync-map.js <importer-config>    seed the map from a data-importer config JSON
 //   node sync-map.js set <ACT-id> <ffId>  map one Bridge account to a Firefly account id
 //
@@ -71,6 +73,69 @@ async function seed(db, configPath) {
   }
 }
 
+// Live-account matching rules: a Bridge account matches when its org contains
+// `org` (case-insensitive) and, if given, its name contains `name`; it then maps
+// to the Firefly account named `firefly`. Investment orgs are deliberately absent
+// so they stay unmapped (the oracle owns them). Keep this in sync with the account
+// names created in Firefly.
+const AUTO_RULES = [
+  { org: 'huntington', name: 'primary checking', firefly: 'Huntington Bank - Checking' },
+  { org: 'huntington', name: 'premier savings', firefly: 'Huntington Bank - Savings' },
+  { org: 'chase', name: 'chase auto', firefly: 'Chase - Auto' },
+  { org: 'chase', name: 'amazon prime', firefly: 'Credit - Amazon Prime' },
+  { org: 'chase', name: 'mortgage', firefly: 'Chase - Mortgage' },
+  { org: 'city national', name: '', firefly: 'CNB - Joint' },
+  { org: 'discover', name: '', firefly: 'Credit - Discover' },
+  { org: 'apple card', name: '', firefly: 'Credit - Apple' },
+  { org: 'synchrony', name: 'sleep outfitters', firefly: 'Credit - Synchrony (Sleep)' },
+  { org: 'synchrony', name: 'reeds', firefly: 'Credit - Synchrony (Reeds)' },
+];
+
+// Orgs whose accounts are oracle-owned; never mapped (mapping would double-count).
+const INVESTMENT_ORGS = ['empower', 'coinbase', 'schwab'];
+
+async function autoSeed(db, apply) {
+  if (!process.env.SIMPLEFIN_ACCESS_URL) {
+    console.error('SIMPLEFIN_ACCESS_URL not set; cannot fetch Bridge accounts.');
+    process.exit(1);
+  }
+  const accounts = await fetchBalances();
+  const byName = await fireflyAccountsByName();
+  const planned = [];
+  const skippedInvestment = [];
+  const unmatched = [];
+
+  for (const a of accounts) {
+    const org = (a.org?.name ?? '').toLowerCase();
+    const nm = String(a.name ?? '').toLowerCase();
+    if (INVESTMENT_ORGS.some((o) => org.includes(o))) {
+      skippedInvestment.push(`${a.org?.name ?? ''} ${a.name ?? ''}`);
+      continue;
+    }
+    const rule = AUTO_RULES.find((r) => org.includes(r.org) && (r.name === '' || nm.includes(r.name)));
+    const ff = rule ? byName.get(rule.firefly.toLowerCase()) : null;
+    if (ff) planned.push({ sfId: String(a.id), ffId: ff.id, ffName: ff.name, label: `${a.org?.name ?? ''} ${a.name ?? ''}`.trim() });
+    else unmatched.push({ id: a.id, label: `${a.org?.name ?? ''} ${a.name ?? ''}`.trim(), reason: rule ? `no Firefly account "${rule.firefly}"` : 'no matching rule' });
+  }
+
+  console.log(`Planned mappings (${planned.length}):`);
+  for (const p of planned) console.log(`  ${p.label.padEnd(52)} -> #${p.ffId} ${p.ffName}`);
+  if (skippedInvestment.length) {
+    console.log(`\nSkipped, oracle-owned (${skippedInvestment.length}): ${skippedInvestment.length} investment accounts`);
+  }
+  if (unmatched.length) {
+    console.log(`\nUnmatched (map by hand with: node sync-map.js set <ACT-id> <fireflyId>):`);
+    for (const u of unmatched) console.log(`  ${u.id}  ${u.label}  (${u.reason})`);
+  }
+
+  if (apply) {
+    for (const p of planned) upsertSyncAccountMapEntry(db, { simplefinId: p.sfId, fireflyAccountId: p.ffId, fireflyAccountName: p.ffName });
+    console.log(`\nWrote ${planned.length} mappings.`);
+  } else {
+    console.log('\nDry run. Re-run with "auto apply" to write.');
+  }
+}
+
 async function setOne(db, sfId, ffId) {
   const byName = await fireflyAccountsByName();
   const match = [...byName.values()].find((a) => String(a.id) === String(ffId));
@@ -87,6 +152,7 @@ async function main() {
   const [a, b, c] = process.argv.slice(2);
   try {
     if (!a) await show(db);
+    else if (a === 'auto') await autoSeed(db, b === 'apply');
     else if (a === 'set' && b && c) await setOne(db, b, c);
     else await seed(db, a);
   } finally {
