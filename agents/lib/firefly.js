@@ -410,7 +410,15 @@ export async function createDescriptionRule({ merchant, description, category, e
     triggers: [{ type: 'description_contains', value: token, stop_processing: false, active: true }],
     actions,
   };
-  return api('/rules', { method: 'POST', body: JSON.stringify(body) });
+  try {
+    return await api('/rules', { method: 'POST', body: JSON.stringify(body) });
+  } catch (e) {
+    // A rule for this merchant already exists (a prior confirmation of the same
+    // payee, common when clearing a queue of repeated merchants). That is success,
+    // not an error: the merchant is already deterministic. Anything else rethrows.
+    if (e.status === 422 && /already in use/i.test(e.message)) return { existing: true };
+    throw e;
+  }
 }
 
 // Transaction ids carrying a given tag, paged. Used by the CSV backfill rollback.
