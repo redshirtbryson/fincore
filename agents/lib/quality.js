@@ -339,7 +339,15 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
 // and name collisions cannot corrupt rows; rows for accounts that no longer exist
 // are pruned so they cannot alarm forever.
 export async function runFreshnessPass(db, { now = new Date() } = {}) {
-  const accounts = (await firefly.getAccounts('asset')).filter((a) => a.active !== false);
+  // Judge ONLY feed-backed accounts. An account has a feed iff it is in the sync
+  // map; manual assets (Home, Cash wallet, the Pokemon collection) are not, and
+  // must not alarm as stale forever just because their only entry is an opening
+  // balance. With no map seeded, freshness has nothing to judge, which is correct:
+  // freshness is meaningless without knowing which accounts have a live feed.
+  const feedIds = new Set([...getSyncAccountMap(db).values()].map((m) => String(m.fireflyAccountId)));
+  const accounts = (await firefly.getAccounts('asset')).filter(
+    (a) => a.active !== false && feedIds.has(String(a.id))
+  );
   const results = await Promise.allSettled(accounts.map((a) => firefly.getLatestTransactionDate(a.id)));
 
   const feeds = [];

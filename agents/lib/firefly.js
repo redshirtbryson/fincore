@@ -202,7 +202,11 @@ export async function getAccounts(type) {
 // reference for reconciliation. Returns a number or null when unavailable or not
 // USD; the reconcile engine treats null as a flagged cannot-reconcile, never a pass.
 export async function getSummaryNetWorth(dateStr) {
-  const j = await api(`/summary/basic?start=${dateStr}&end=${dateStr}`);
+  // Firefly's /summary/basic requires start < end (a same-day range 422s). The
+  // net worth figure it returns is end-of-range, so a one-day window ending on
+  // dateStr gives the balance as of dateStr.
+  const start = nyDateStr(new Date(new Date(`${dateStr}T00:00:00Z`).getTime() - 86400000));
+  const j = await api(`/summary/basic?start=${start}&end=${dateStr}`);
   const entry = j?.['net-worth-in-USD'] ?? Object.entries(j || {}).find(([k]) => k.startsWith('net-worth-in-'))?.[1];
   const v = entry?.monetary_value;
   const n = typeof v === 'number' ? v : v !== undefined && v !== null && v !== '' ? Number(v) : NaN;
