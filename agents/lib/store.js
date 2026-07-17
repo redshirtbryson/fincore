@@ -204,6 +204,27 @@ const MIGRATIONS = [
     UNIQUE (source, account_id, as_of)
   );
   `,
+  // v3: fincore-owned SimpleFIN transaction sync (2026-07-17). The data importer's
+  // SimpleFIN fetch ships a date-conversion bug (requests 1993 epochs, which the
+  // Bridge rejects), so daily ingestion is done here: the map pins which Bridge
+  // accounts flow into which Firefly accounts, and the seen-ledger makes ingestion
+  // idempotent alongside Firefly's own duplicate-hash guard.
+  `
+  CREATE TABLE simplefin_account_map (
+    simplefin_id TEXT PRIMARY KEY,
+    firefly_account_id TEXT NOT NULL,
+    firefly_account_name TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created TEXT NOT NULL DEFAULT (datetime('now')),
+    updated TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE simplefin_seen (
+    txn_id TEXT PRIMARY KEY,
+    firefly_tx_id TEXT,
+    ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
 ];
 
 export function openStore(dbPath = process.env.FINCORE_DB_PATH || DEFAULT_PATH) {
@@ -440,6 +461,61 @@ export function touchFeed(db, feed, { status = 'ok' } = {}) {
      VALUES (?, datetime('now'), ?, datetime('now'))
      ON CONFLICT(feed) DO UPDATE SET last_seen = datetime('now'), status = excluded.status, updated = datetime('now')`
   ).run(feed, status);
+}
+
+// --- SimpleFIN sync: account map and seen-ledger ---
+
+export function getSyncAccountMap(db) {
+  const map = new Map();
+  for (const row of db
+    .prepare('SELECT simplefin_id, firefly_account_id, firefly_account_name FROM simplefin_account_map WHERE active = 1')
+    .all()) {
+    map.set(row.simplefin_id, { fireflyAccountId: row.firefly_account_id, fireflyAccountName: row.firefly_account_name });
+  }
+  return map;
+}
+
+export function upsertSyncAccountMapEntry(db, { simplefinId, fireflyAccountId, fireflyAccountName = null, actor = 'sync-map' }) {
+  const before = db.prepare('SELECT * FROM simplefin_account_map WHERE simplefin_id = ?').get(simplefinId) ?? null;
+  auditedWrite(
+    db,
+    {
+      actor,
+      action: 'simplefin_account_map.upsert',
+      target: `simplefin_account_map:${simplefinId}`,
+      before,
+      after: { fireflyAccountId, fireflyAccountName },
+      reversalHandle: reversalHandleFor('simplefin_account_map', simplefinId, before),
+    },
+    () =>
+      db
+        .prepare(
+          `INSERT INTO simplefin_account_map (simplefin_id, firefly_account_id, firefly_account_name, active, updated)
+           VALUES (?, ?, ?, 1, datetime('now'))
+           ON CONFLICT(simplefin_id) DO UPDATE SET firefly_account_id = excluded.firefly_account_id,
+             firefly_account_name = excluded.firefly_account_name, active = 1, updated = datetime('now')`
+        )
+        .run(simplefinId, String(fireflyAccountId), fireflyAccountName)
+  );
+}
+
+export function seenTxnIds(db, txnIds) {
+  // Chunked IN queries; SQLite's default parameter cap is 999.
+  const seen = new Set();
+  for (let i = 0; i < txnIds.length; i += 500) {
+    const chunk = txnIds.slice(i, i + 500);
+    const placeholders = chunk.map(() => '?').join(',');
+    for (const row of db.prepare(`SELECT txn_id FROM simplefin_seen WHERE txn_id IN (${placeholders})`).all(...chunk)) {
+      seen.add(row.txn_id);
+    }
+  }
+  return seen;
+}
+
+export function markTxnSeen(db, txnId, fireflyTxId = null) {
+  db.prepare(
+    'INSERT INTO simplefin_seen (txn_id, firefly_tx_id) VALUES (?, ?) ON CONFLICT(txn_id) DO NOTHING'
+  ).run(txnId, fireflyTxId);
 }
 
 // --- account valuations (the balance-oracle layer) ---

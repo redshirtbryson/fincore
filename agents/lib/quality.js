@@ -5,8 +5,20 @@ import * as firefly from './firefly.js';
 import { matchTransfers, matchReimbursements, parseAmount } from './matching.js';
 import { assessFreshness, staleSummaryLine } from './freshness.js';
 import { reconcileNetWorth, reconcilePaystubDeposits } from './reconcile.js';
-import { audit, reversalHandleFor, latestPaystub, recordFeedStatus, getPref, getMeta, upsertValuation } from './store.js';
-import { fetchBalances, normalizeValuation, matchesValuationRule, parseMatchRules, overlapsFireflyAccount } from './simplefin.js';
+import {
+  audit,
+  reversalHandleFor,
+  latestPaystub,
+  recordFeedStatus,
+  getPref,
+  getMeta,
+  upsertValuation,
+  getSyncAccountMap,
+  seenTxnIds,
+  markTxnSeen,
+} from './store.js';
+import { fetchBalances, fetchTransactions, normalizeValuation, matchesValuationRule, parseMatchRules, overlapsFireflyAccount } from './simplefin.js';
+import { transformTransactions, epochWindow } from './sync.js';
 
 const MATCH_LOOKBACK_DAYS = Number(process.env.MATCH_LOOKBACK_DAYS) > 0 ? Number(process.env.MATCH_LOOKBACK_DAYS) : 90;
 const MATCH_WRITE_CAP = Number(process.env.MATCH_WRITE_CAP) > 0 ? Number(process.env.MATCH_WRITE_CAP) : 20;
@@ -79,6 +91,82 @@ async function repairHalfMatches(db, txns, flags) {
     repaired += 1;
   }
   return repaired;
+}
+
+const SYNC_LOOKBACK_DAYS = Number(process.env.SYNC_LOOKBACK_DAYS) > 0 ? Number(process.env.SYNC_LOOKBACK_DAYS) : 3;
+const SYNC_CAP = Number(process.env.SYNC_CAP) > 0 ? Number(process.env.SYNC_CAP) : 200;
+
+// fincore-owned SimpleFIN transaction sync (replaces the data importer's broken
+// SimpleFIN fetch; the importer remains the CSV backfill tool). One request per
+// run covers every Bridge account; only mapped accounts flow into Firefly.
+// Idempotent three ways: the seen-ledger, Firefly's duplicate-hash guard, and
+// failed creates are NOT marked seen so tomorrow retries them.
+export async function runSyncPass(db, { now = new Date() } = {}) {
+  const map = getSyncAccountMap(db);
+  if (!process.env.SIMPLEFIN_ACCESS_URL || map.size === 0) {
+    return { enabled: false, created: 0, flags: map.size === 0 && process.env.SIMPLEFIN_ACCESS_URL ? ['sync map empty: run node sync-map.js <importer-config.json> to seed it'] : [], line: '' };
+  }
+
+  const accounts = await fetchTransactions(epochWindow({ now, lookbackDays: SYNC_LOOKBACK_DAYS }));
+
+  const candidateIds = [];
+  for (const a of accounts) {
+    if (!map.has(String(a?.id))) continue;
+    for (const t of a?.transactions ?? []) if (t?.id) candidateIds.push(String(t.id));
+  }
+  const seen = seenTxnIds(db, candidateIds);
+  const { creates, flags, skippedSeen, skippedPending } = transformTransactions(accounts, map, {
+    seenIds: seen,
+    nyDateStr: firefly.nyDateStr,
+  });
+
+  const capped = creates.slice(0, SYNC_CAP);
+  if (creates.length > capped.length) {
+    flags.push(`sync cap (${SYNC_CAP}) reached; ${creates.length - capped.length} transactions defer to the next run`);
+  }
+
+  let created = 0;
+  let duplicates = 0;
+  for (const c of capped) {
+    try {
+      const r = await firefly.createTransaction(c);
+      if (r.duplicate) {
+        // Firefly's duplicate hash only catches byte-identical journals, i.e. a
+        // prior SYNC create (crash between create and mark-seen). It does NOT
+        // deduplicate against CSV-imported rows, whose formatting differs; keep
+        // the CSV backfill end-date at least SYNC_LOOKBACK_DAYS before the first
+        // sync run (documented in the README) or duplicates are genuine.
+        duplicates += 1;
+        markTxnSeen(db, c.txnId, null);
+      } else {
+        created += 1;
+        markTxnSeen(db, c.txnId, r.id);
+      }
+    } catch (e) {
+      // Not marked seen: tomorrow retries. Per-item, so one bad row cannot sink the run.
+      flags.push(`sync failed for ${c.accountName ?? c.txnId} on ${c.date}: ${e.message}`);
+    }
+  }
+
+  // Status reflects whether writes LANDED: a batch where every create failed is a
+  // stale feed even though the fetch succeeded.
+  const landed = created > 0 || duplicates > 0 || capped.length === 0;
+  recordFeedStatus(db, 'simplefin-sync', {
+    lastSeen: landed ? firefly.nyDateStr(now) : null,
+    status: landed ? 'ok' : 'stale',
+  });
+  const parts = [];
+  if (created) parts.push(`${created} imported`);
+  if (duplicates) parts.push(`${duplicates} already present`);
+  if (skippedPending) parts.push(`${skippedPending} pending held back`);
+  return {
+    enabled: true,
+    created,
+    duplicates,
+    skippedSeen,
+    flags,
+    line: parts.length ? `Sync: ${parts.join(', ')}.` : '',
+  };
 }
 
 // Transfer and reimbursement matching. Conservative by design:

@@ -111,15 +111,17 @@ test('net worth sums valuations and fails closed on broken or non-USD ones', () 
   assert.equal(eur.netWorth, null);
 });
 
-test('migration v1 to v2 adds account_valuations without touching v1 data', () => {
+test('migrations reach the current version with all tables present', () => {
   // Simulate the deployed prod db: open (migrates to current), then confirm both
   // the new table and the old ones coexist and user_version is 2.
   const db = openStore(':memory:');
-  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.pragma('user_version', { simple: true }), 3);
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
     .all()
     .map((r) => r.name);
   assert.ok(tables.includes('account_valuations'));
+  assert.ok(tables.includes('simplefin_account_map'));
+  assert.ok(tables.includes('simplefin_seen'));
   assert.ok(tables.includes('nw_dti_series'));
 });

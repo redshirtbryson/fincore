@@ -107,9 +107,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Fetch current balances for all Bridge-connected accounts (no transactions).
-// Transient failures retry with backoff; a 429 surfaces immediately.
-export async function fetchBalances() {
+async function fetchAccountsEndpoint(query) {
   const accessUrl = process.env.SIMPLEFIN_ACCESS_URL || '';
   if (!accessUrl) throw new Error('SIMPLEFIN_ACCESS_URL not set');
   const { base, auth } = splitAccessUrl(accessUrl);
@@ -117,7 +115,7 @@ export async function fetchBalances() {
   let lastErr = null;
   for (let i = 0; i <= RETRY_BACKOFF_MS.length; i += 1) {
     try {
-      const res = await fetch(`${base}/accounts?balances-only=1`, {
+      const res = await fetch(`${base}/accounts?${query}`, {
         headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
@@ -137,4 +135,22 @@ export async function fetchBalances() {
     }
   }
   throw lastErr;
+}
+
+// Fetch current balances for all Bridge-connected accounts (no transactions).
+// Transient failures retry with backoff; a 429 surfaces immediately.
+export async function fetchBalances() {
+  return fetchAccountsEndpoint('balances-only=1');
+}
+
+// Fetch accounts WITH transactions for an epoch-second window. One request covers
+// every Bridge account. Epochs are validated here because a malformed range is
+// exactly the data-importer bug this sync exists to replace: the Bridge rejects
+// nonsense ranges with a misleading 429.
+export async function fetchTransactions({ startEpoch, endEpoch }) {
+  const MIN_SANE_EPOCH = 1500000000; // 2017; anything earlier is a date-math bug
+  if (!Number.isInteger(startEpoch) || !Number.isInteger(endEpoch) || startEpoch < MIN_SANE_EPOCH || endEpoch <= startEpoch) {
+    throw new RangeError(`refusing insane epoch range ${startEpoch}..${endEpoch}`);
+  }
+  return fetchAccountsEndpoint(`start-date=${startEpoch}&end-date=${endEpoch}`);
 }

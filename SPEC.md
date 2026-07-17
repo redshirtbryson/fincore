@@ -1,10 +1,12 @@
 # Fincore: Personal Financial Assistant
 
-## Claude Code Handoff Spec (v4.4)
+## Claude Code Handoff Spec (v4.5)
 
 Owner: Bryson
 Prepared for: Claude Code
 Style rule for all generated docs and code comments: plain prose, no em-dashes.
+
+Changelog v4.5 (importer replacement): the Firefly data importer's SimpleFIN fetch ships a date-conversion bug (it requests 1993-era epochs, which the Bridge rejects with a misleading 429), confirmed by manual correct-epoch requests succeeding immediately after importer failures. Decided: fincore owns daily transaction ingestion (the `simplefin-sync` pass: one correct-epoch request per day covering all Bridge accounts, mapped accounts only, idempotent via a local seen-ledger plus Firefly's duplicate hash, apply_rules on arrival, per-run caps, posted-only). This is a deliberate exception to prebuilt-first, justified because the prebuilt is broken upstream and dedup here is id-based, not hand-rolled heuristics. The importer is retained ONLY as the CSV backfill tool (its CSV flow works). Historical backfill comes from bank CSV exports; CSV backfill must end at least SYNC_LOOKBACK_DAYS before the first sync run, because Firefly's duplicate hash cannot match differently-formatted rows across the two tools.
 
 Changelog v4.4 (automation requirement): Schwab's Trader API expires refresh tokens every 7 days, which made net worth depend on a weekly manual re-auth. Decided: net worth takes Schwab BALANCES from the SimpleFIN balance oracle like every other oracle account (fully automated); the Trader API sidecar provides position-level detail for the Phase 11 analytics only, is excluded from the net worth sum, and a lapsed token pauses analysis without staling the headline number. Sections 10.11, 19, and 20 updated accordingly.
 

@@ -126,6 +126,41 @@ export async function getTransactionsNeedingReview({ lookbackDays = 30, cap = 40
   return items;
 }
 
+// Create one transaction (used by the SimpleFIN sync). apply_rules lets the rules
+// engine categorize on arrival; error_if_duplicate_hash is Firefly's own content
+// dedup, the second layer behind the sync's seen-ledger. Returns { id } on create
+// or { duplicate: true } when Firefly already holds an identical transaction.
+export async function createTransaction({ type, date, amount, description, sourceId = null, sourceName = null, destinationId = null, destinationName = null, externalId = null, tags = [] }) {
+  const txn = {
+    type,
+    date,
+    amount: String(amount),
+    description,
+    tags,
+  };
+  if (sourceId !== null) txn.source_id = String(sourceId);
+  else if (sourceName) txn.source_name = sourceName;
+  if (destinationId !== null) txn.destination_id = String(destinationId);
+  else if (destinationName) txn.destination_name = destinationName;
+  if (externalId) txn.external_id = String(externalId);
+
+  try {
+    const j = await api('/transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        error_if_duplicate_hash: true,
+        apply_rules: true,
+        fire_webhooks: false,
+        transactions: [txn],
+      }),
+    });
+    return { id: j?.data?.id ? String(j.data.id) : null };
+  } catch (e) {
+    if (e.status === 422 && /duplicate/i.test(e.message)) return { duplicate: true };
+    throw e;
+  }
+}
+
 // List accounts of a Firefly type group ('asset', 'liabilities'). Balances come
 // back as strings; parse defensively and let the caller's engine flag NaN rather
 // than dropping accounts silently.

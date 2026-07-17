@@ -66,12 +66,34 @@ async function pingHealthcheck(ok) {
   }
 }
 
+// SimpleFIN transaction sync, run BEFORE categorization so today's transactions
+// categorize today. Lazy store import, same degradation story as the rest.
+async function runDailySync() {
+  const mods = await loadStore();
+  if (!mods) return '';
+  let db = null;
+  try {
+    db = mods.store.openStore();
+    const quality = await import('./lib/quality.js');
+    const s = await quality.runSyncPass(db);
+    const lines = [];
+    if (s.line) lines.push(s.line);
+    quality.surfaceFlags(lines, 'Sync', s.flags ?? []);
+    return lines.length ? `\n${lines.join('\n')}` : '';
+  } catch (e) {
+    return `\nSync failed: ${e.message}`;
+  } finally {
+    if (db) db.close();
+  }
+}
+
 async function main() {
   // Health check first so a bad token fails loudly and early.
   const about = await firefly.about();
   console.log('firefly ok:', about?.version);
 
   await maybeTriggerImport();
+  const syncLines = await runDailySync();
 
   // No early return on an empty residue: the store-backed passes (snapshot,
   // valuations, Schwab, freshness) must run every day regardless of whether
@@ -79,6 +101,7 @@ async function main() {
   const items = await firefly.getTransactionsNeedingReview({ lookbackDays: LOOKBACK, cap: CAP });
   if (items.length === 0) {
     let summary = 'Fincore daily: no new transactions to categorize.';
+    summary += syncLines;
     summary += await dailyStoreLines();
     await sendHeartbeat(summary);
     console.log(summary);
@@ -124,6 +147,7 @@ async function main() {
   const overflow = items.length >= CAP ? ` Cap reached (${CAP}); more will process tomorrow.` : '';
   let summary = `Fincore daily: ${applied} auto-categorized, ${asked} need your review.${overflow}`;
   if (failures.length) summary += `\n${failures.length} errors: ${failures.slice(0, 5).join('; ')}`;
+  summary += syncLines;
   summary += await dailyStoreLines();
   await sendHeartbeat(summary);
   console.log(summary);

@@ -19,6 +19,14 @@ Baseline rules (SPEC section 20): locks only on explicit confirmation in onboard
 
 The deterministic engines are pure and tested: `lib/networth.js` (Firefly accounts + Schwab positions, no overlap by design, flag-don't-guess on dirty inputs) and `lib/dti.js` (back-end DTI including housing, cadence scaling at 26/12 for biweekly, partial-history blend of observed months with declared amounts, basis always reported). `lib/outcomes.js` is the thin I/O glue.
 
+## SimpleFIN transaction sync
+
+fincore owns daily transaction ingestion (`lib/sync.js` + the sync pass in `lib/quality.js`): the third-party importer's SimpleFIN fetch has a fatal date bug, so it is retained only for CSV backfills. One correct-epoch request per day covers every Bridge account; only accounts in the sync map flow into Firefly (investment accounts stay out by design, the oracle owns them). Idempotent three ways: a local seen-ledger, Firefly's duplicate hash, and failed creates retry next run. Transactions arrive with `apply_rules` on, the `simplefin-sync` tag, and the SimpleFIN id as external id; the categorizer picks up the residue the same run.
+
+Setup: seed the map once with `node sync-map.js <importer-config.json>` (resolves by config ids and account names; `node sync-map.js` shows the map and unmapped Bridge accounts; `node sync-map.js set <ACT-id> <fireflyId>` maps one by hand).
+
+CSV backfill ordering rule: finish CSV backfills with an end date at least `SYNC_LOOKBACK_DAYS` (default 3) before the first sync run. Firefly's duplicate hash only catches byte-identical journals, so a CSV row and a sync row for the same real transaction will NOT deduplicate against each other.
+
 ## Quality passes (Phase 4)
 
 Three more pure engines protect the headline numbers, orchestrated by `lib/quality.js` inside the daily run:
