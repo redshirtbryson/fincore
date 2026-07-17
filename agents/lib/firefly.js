@@ -409,4 +409,24 @@ export async function createDescriptionRule({ merchant, description, category, e
   return api('/rules', { method: 'POST', body: JSON.stringify(body) });
 }
 
+// Transaction ids carrying a given tag, paged. Used by the CSV backfill rollback.
+export async function getTransactionsByTag(tag) {
+  const ids = [];
+  let page = 1;
+  const maxPages = 100;
+  while (page <= maxPages) {
+    const j = await api(`/tags/${encodeURIComponent(tag)}/transactions?limit=50&page=${page}`);
+    const rows = j?.data || [];
+    if (rows.length === 0) break;
+    for (const r of rows) ids.push(String(r.id));
+    if (rows.length < 50) break;
+    page += 1;
+  }
+  return ids;
+}
+
+export async function deleteTransaction(id) {
+  return api(`/transactions/${id}`, { method: 'DELETE' });
+}
+
 export { TAG_DONE, TAG_REVIEW };
