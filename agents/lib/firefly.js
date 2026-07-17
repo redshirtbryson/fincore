@@ -265,9 +265,14 @@ export async function getRecentTransactions({ types = ['withdrawal', 'deposit'],
             date: (s.date || '').slice(0, 10),
             description: s.description || '',
             account: (type === 'deposit' ? s.destination_name : s.source_name) || '',
+            accountId: (type === 'deposit' ? s.destination_id : s.source_id)
+              ? String(type === 'deposit' ? s.destination_id : s.source_id)
+              : null,
             counterparty: (type === 'deposit' ? s.source_name : s.destination_name) || '',
             category: s.category_name || '',
             tags: s.tags || [],
+            currencyCode: s.currency_code || null,
+            externalId: s.external_id || null,
           });
           count += 1;
         }
@@ -439,6 +444,50 @@ export async function getTransactionsByTag(tag) {
 
 export async function deleteTransaction(id) {
   return api(`/transactions/${id}`, { method: 'DELETE' });
+}
+
+// Convert an existing split into a proper Firefly transfer, in place. A transfer
+// touches both account registers and creates NO expense or revenue account, which
+// is what an internal movement (checking to savings, a card payment) should be.
+// Left as two independent legs (a withdrawal into an expense account plus a deposit
+// out of a revenue account) the same movement double-counts as expense plus income.
+//
+// This edits ONE surviving leg rather than delete-both-and-recreate: the caller
+// deletes the redundant opposite leg first (the conservative order, so a mid-flight
+// failure overstates expense rather than income), then converts the leg that
+// remains. destinationId is the own account the money actually landed in.
+export async function convertToTransfer(txId, journalId, { sourceId, destinationId, addTags = [], knownTags = null }) {
+  const baseTags = knownTags ?? (await getSplit(txId, journalId))?.tags ?? [];
+  const tags = new Set(baseTags);
+  for (const t of addTags) tags.add(t);
+  const update = {
+    transaction_journal_id: String(journalId),
+    type: 'transfer',
+    source_id: String(sourceId),
+    destination_id: String(destinationId),
+    tags: Array.from(tags),
+  };
+  const body = {
+    apply_rules: false,
+    fire_webhooks: false,
+    transactions: [update],
+  };
+  const res = await api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
+
+  // Read-back verification (money-grade destructive write): a 200 is weaker evidence
+  // than the stored result. Firefly's type conversion has version-specific quirks
+  // (transfer legs must both be asset/liability; some releases re-journal). Confirm
+  // the split is actually a transfer to the intended destination before the caller
+  // counts it done; on mismatch, throw so the caller reports rather than trusts it.
+  const split = await getSplit(txId, journalId);
+  const gotType = String(split?.type || '').toLowerCase();
+  const gotDest = split?.destination_id != null ? String(split.destination_id) : null;
+  if (gotType !== 'transfer' || gotDest !== String(destinationId)) {
+    throw new Error(
+      `convertToTransfer verification failed for tx ${txId}/${journalId}: type=${gotType || '(none)'}, destination=${gotDest || '(none)'} (wanted transfer -> ${destinationId})`
+    );
+  }
+  return res;
 }
 
 export { TAG_DONE, TAG_REVIEW };

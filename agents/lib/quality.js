@@ -2,7 +2,7 @@
 // matching, freshness, and reconciliation engines. Each pass is independently
 // try/caught (skip-and-report); math lives in the engines.
 import * as firefly from './firefly.js';
-import { matchTransfers, matchReimbursements, parseAmount } from './matching.js';
+import { matchTransfers, matchReimbursements, parseAmount, isInternalTransferDescription } from './matching.js';
 import { assessFreshness, staleSummaryLine } from './freshness.js';
 import { reconcileNetWorth, reconcilePaystubDeposits } from './reconcile.js';
 import {
@@ -91,6 +91,136 @@ async function repairHalfMatches(db, txns, flags) {
     repaired += 1;
   }
   return repaired;
+}
+
+// Categories that are themselves internal movements, so their presence on a matched
+// pair is not a reason to withhold auto-conversion (a card payment is categorized
+// Debt Payment by the rules yet is exactly what should become a transfer). Any other
+// category is a human signal to confirm rather than auto-delete.
+const INTERNAL_CATEGORIES = new Set(['Transfer', 'Debt Payment']);
+
+// Set of Firefly transaction (group) ids that carry more than one split in the
+// fetched window. deleteTransaction removes an entire group and convertToTransfer
+// retypes one split, so a leg belonging to a multi-split group cannot be safely
+// converted (it would destroy or mis-type the sibling splits). Sync and CSV rows are
+// single-split; manual entries can be split. Such pairs are queued, never converted.
+export function multiSplitTxIds(items) {
+  const journalsByTx = new Map();
+  for (const t of items || []) {
+    if (!journalsByTx.has(t.tx_id)) journalsByTx.set(t.tx_id, new Set());
+    journalsByTx.get(t.tx_id).add(t.journal_id);
+  }
+  const multi = new Set();
+  for (const [txId, journals] of journalsByTx) if (journals.size > 1) multi.add(txId);
+  return multi;
+}
+
+// Snapshot one leg for the audit trail: everything needed to reconstruct it by hand
+// if a conversion ever has to be reversed (there is no automated undo yet).
+function legSnapshot(s) {
+  return {
+    tx_id: s.tx_id,
+    journal_id: s.journal_id,
+    accountId: s.accountId,
+    account: s.account,
+    counterparty: s.counterparty,
+    amount: s.amount,
+    date: s.date,
+    description: s.description,
+    category: s.category || null,
+    tags: Array.isArray(s.tags) ? s.tags : [],
+    currencyCode: s.currencyCode ?? null,
+    externalId: s.externalId ?? null,
+  };
+}
+
+// Whether a matched transfer pair may be auto-converted without confirmation. The
+// DEPOSIT leg is the one deleted and the one that reads as income, so the guard is
+// built around never destroying real income. A deposit is safe to convert when EITHER:
+//   (1) the deposit leg's own description names an internal movement
+//       (isInternalTransferDescription), e.g. "INTERNET TFR FRM CHECKING"; OR
+//   (2) the deposit lands in a LIABILITY (credit-card) account AND the withdrawal leg
+//       names an internal movement. Money is never paid INTO a credit card as income;
+//       a deposit there is a payment, and a card refund/statement-credit has no
+//       matching own-account withdrawal, so a unique pair whose paying side reads like
+//       a card payment ("DISCOVER E-PAYMENT") is unambiguously that.
+// On top of the deposit test: both legs must be category-clean (empty or internal),
+// both own-account ids must resolve, and neither leg may be part of a multi-split
+// group. Anything else is a confirm-tier decision, not autonomous. liabilityIds is the
+// set of Firefly liability account ids; omit it to disable path (2).
+// Returns { ok: true } or { ok: false, reason }.
+export function autoConvertVerdict(m, { multiSplit = new Set(), liabilityIds = new Set() } = {}) {
+  const depositNamesInternal = isInternalTransferDescription(m.deposit.description);
+  const depositIsCardPayment =
+    liabilityIds.has(m.deposit.accountId) && isInternalTransferDescription(m.withdrawal.description);
+  if (!depositNamesInternal && !depositIsCardPayment) {
+    return { ok: false, reason: 'deposit leg is neither an internal movement nor a corroborated card payment' };
+  }
+  const categoriesInternal = [m.withdrawal, m.deposit].every(
+    (s) => !s.category || INTERNAL_CATEGORIES.has(s.category)
+  );
+  if (!categoriesInternal) return { ok: false, reason: 'a leg has a real (non-internal) category' };
+  if (!m.withdrawal.accountId || !m.deposit.accountId) {
+    return { ok: false, reason: 'could not resolve own-account ids' };
+  }
+  if (multiSplit.has(m.withdrawal.tx_id) || multiSplit.has(m.deposit.tx_id)) {
+    return { ok: false, reason: 'a leg is part of a multi-split transaction' };
+  }
+  return { ok: true };
+}
+
+// Execute a vetted conversion: collapse a withdrawal+deposit leg-pair into one real
+// Firefly transfer. A begin-audit is written BEFORE the destructive delete so a hard
+// crash between the two writes still leaves a durable record of both original legs;
+// the completion audit follows. On failure a durable notification is queued (the
+// in-memory flag alone would not survive a process death) and the error is rethrown
+// for the caller to surface. Order is delete-deposit-then-convert-withdrawal so a
+// mid-flight failure overstates expense, never income. Returns nothing; throws on
+// failure.
+export async function convertPairToTransfer(db, m, { actor }) {
+  const tag = `transfer-converted:${m.withdrawal.journal_id}-${m.deposit.journal_id}`;
+  const before = { withdrawal: legSnapshot(m.withdrawal), deposit: legSnapshot(m.deposit) };
+  // Durable write-ahead intent: survives a crash between the delete and the convert.
+  audit(db, {
+    actor,
+    action: 'transfer.convert.begin',
+    target: `firefly:tx:${m.withdrawal.tx_id}:${m.withdrawal.journal_id}`,
+    before,
+    after: { plannedDeleteDepositTx: m.deposit.tx_id, tag },
+    reversalHandle: reversalHandleFor('firefly_transfer_convert', tag, before),
+  });
+  try {
+    await firefly.deleteTransaction(m.deposit.tx_id);
+    await firefly.convertToTransfer(m.withdrawal.tx_id, m.withdrawal.journal_id, {
+      sourceId: m.withdrawal.accountId,
+      destinationId: m.deposit.accountId,
+      addTags: [tag],
+      knownTags: m.withdrawal.tags,
+    });
+  } catch (e) {
+    queueNotification(
+      db,
+      'error',
+      `Transfer conversion failed mid-write for ${pairLabel(m.withdrawal, m.deposit)}: ${e.message}. ` +
+        `Deposit leg ${m.deposit.tx_id} may be deleted with withdrawal leg ${m.withdrawal.tx_id} not yet a transfer (overstated expense). Check by hand.`
+    );
+    throw e;
+  }
+  audit(db, {
+    actor,
+    action: 'transfer.convert',
+    target: `firefly:tx:${m.withdrawal.tx_id}:${m.withdrawal.journal_id}`,
+    before,
+    after: {
+      type: 'transfer',
+      sourceId: m.withdrawal.accountId,
+      destinationId: m.deposit.accountId,
+      tag,
+      dateDelta: m.dateDelta,
+      deletedDepositTx: m.deposit.tx_id,
+    },
+    reversalHandle: reversalHandleFor('firefly_transfer_convert', tag, before),
+  });
 }
 
 const SYNC_LOOKBACK_DAYS = Number(process.env.SYNC_LOOKBACK_DAYS) > 0 ? Number(process.env.SYNC_LOOKBACK_DAYS) : 3;
@@ -190,7 +320,6 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
       transfersWritten: 0,
       reimbursementsWritten: 0,
       ambiguous: 0,
-      conflicts: 0,
       flags,
       line: `Matching skipped: transaction window truncated at the fetch cap; uniqueness cannot be trusted. Raise the cap or shrink MATCH_LOOKBACK_DAYS.`,
       deposits,
@@ -202,11 +331,19 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
   let written = 0;
   let transfersWritten = 0;
   let reimbursementsWritten = 0;
-  let conflicts = 0;
   let queuedForConfirm = 0;
   const claimed = new Set(); // journal ids claimed by any match this run
 
-  // Transfers.
+  // Transfers. A matched pair is two independent legs the bank feed produced for one
+  // internal movement (a withdrawal into an expense account plus a deposit out of a
+  // revenue account). Left alone it double-counts as expense plus income and pollutes
+  // the income view. The fix is to collapse the pair into ONE real Firefly transfer:
+  // delete the deposit leg, then convert the withdrawal leg in place (see
+  // convertPairToTransfer). Whether a pair is safe to auto-convert without a human is
+  // decided by autoConvertVerdict; anything it rejects is queued for confirmation,
+  // never auto-deleted, regardless of dollar amount.
+  const multiSplit = multiSplitTxIds(txns);
+  const liabilityIds = new Set((await firefly.getAccounts('liabilities')).map((a) => String(a.id)));
   const tRes = matchTransfers(withdrawals, deposits);
   flags.push(...tRes.flags);
   for (const m of tRes.matches) {
@@ -214,46 +351,25 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
       flags.push(`match write cap (${MATCH_WRITE_CAP}) reached; remaining pairs process tomorrow`);
       break;
     }
-    const conflicted = [m.withdrawal, m.deposit].some((s) => s.category && s.category !== 'Transfer');
-    if (conflicted) {
-      conflicts += 1;
-      continue;
-    }
-    const amount = parseAmount(m.withdrawal.amount);
-    if (amount === null || amount > threshold) {
-      queueNotification(db, 'confirm', `Confirm transfer pair: ${pairLabel(m.withdrawal, m.deposit)}`);
+    const verdict = autoConvertVerdict(m, { multiSplit, liabilityIds });
+    if (!verdict.ok) {
+      queueNotification(
+        db,
+        'confirm',
+        `Confirm transfer pair (${verdict.reason}): ${pairLabel(m.withdrawal, m.deposit)}`
+      );
       queuedForConfirm += 1;
       continue;
     }
-    const tag = `transfer-match:${m.withdrawal.journal_id}-${m.deposit.journal_id}`;
     try {
-      // Deposit first: if the second write fails, expense is overstated rather
-      // than income, the conservative direction, and repair completes it next run.
-      await firefly.setCategory(m.deposit.tx_id, m.deposit.journal_id, 'Transfer', {
-        addTags: [tag],
-        knownTags: m.deposit.tags,
-      });
-      await firefly.setCategory(m.withdrawal.tx_id, m.withdrawal.journal_id, 'Transfer', {
-        addTags: [tag],
-        knownTags: m.withdrawal.tags,
-      });
-      audit(db, {
-        actor: 'matcher',
-        action: 'transfer.match',
-        target: `firefly:tx:${m.withdrawal.tx_id}:${m.withdrawal.journal_id}+${m.deposit.tx_id}:${m.deposit.journal_id}`,
-        before: { withdrawalCategory: m.withdrawal.category || null, depositCategory: m.deposit.category || null },
-        after: { category: 'Transfer', tag, dateDelta: m.dateDelta },
-        reversalHandle: reversalHandleFor('firefly_transfer_match', tag, {
-          withdrawalCategory: m.withdrawal.category || null,
-          depositCategory: m.deposit.category || null,
-        }),
-      });
+      await convertPairToTransfer(db, m, { actor: 'matcher' });
       claimed.add(m.withdrawal.journal_id);
       claimed.add(m.deposit.journal_id);
       written += 1;
       transfersWritten += 1;
     } catch (e) {
-      flags.push(`transfer pair ${pairLabel(m.withdrawal, m.deposit)} failed mid-write: ${e.message}; repair pass will complete it tomorrow`);
+      // convertPairToTransfer already queued a durable notice; surface it in the digest too.
+      flags.push(`transfer pair ${pairLabel(m.withdrawal, m.deposit)} failed mid-convert: ${e.message} — needs a manual check`);
     }
   }
 
@@ -319,14 +435,12 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
   if (transfersWritten) parts.push(`${transfersWritten} transfers matched`);
   if (reimbursementsWritten) parts.push(`${reimbursementsWritten} reimbursements matched`);
   if (repaired) parts.push(`${repaired} half-matched pairs repaired`);
-  if (queuedForConfirm) parts.push(`${queuedForConfirm} above the $${threshold} autonomy threshold queued for confirmation`);
+  if (queuedForConfirm) parts.push(`${queuedForConfirm} queued for confirmation`);
   if (ambiguous) parts.push(`${ambiguous} ambiguous queued`);
-  if (conflicts) parts.push(`${conflicts} category conflicts left alone`);
   return {
     transfersWritten,
     reimbursementsWritten,
     ambiguous,
-    conflicts,
     flags,
     line: parts.length ? `Matching: ${parts.join(', ')}.` : '',
     deposits,

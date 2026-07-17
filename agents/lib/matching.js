@@ -15,6 +15,30 @@
 const MATCHED_TAG_PREFIX = 'transfer-match:';
 const REIMBURSED_TAG = 'reimbursed';
 
+// True when a description UNAMBIGUOUSLY names an internal money movement: a transfer
+// between the user's own accounts, or a credit-card payment. This is the autonomy
+// gate for auto-converting a matched pair into a real transfer, which involves
+// deleting a leg, so the bar is high: only phrases that cannot plausibly belong to
+// ordinary external activity are here.
+//
+// Deliberately EXCLUDED (they read as internal but routinely appear on real external
+// spend or income, so an equal-amount coincidence could get a real transaction
+// deleted): AUTOPAY / DIRECTPAY / AUTOMATIC PAYMENT (utility and insurance bill pay
+// to real merchants), ACH DEPOSIT INTERNET (any inbound ACH, including from other
+// people), STATEMENT CREDIT (a refund, i.e. real money in). Such pairs are queued for
+// confirmation, never auto-converted. The caller further requires the DEPOSIT leg (the
+// one being deleted, and the one polluting the income view) to match before acting.
+const INTERNAL_MOVEMENT = [
+  'TFR', 'TRANSFER', 'XFER', 'CRD PYMT', 'CREDIT CRD', 'E-PAYMENT', 'EPAY',
+  'APPLECARD', 'GSBANK PAYMENT', 'PAYMENT THANK YOU', 'OD PROTECTION',
+  'SYNCHRONY BANK', 'INTERNET PAYMENT', 'CC PYMT',
+];
+
+export function isInternalTransferDescription(desc) {
+  const d = String(desc || '').toUpperCase();
+  return INTERNAL_MOVEMENT.some((k) => d.includes(k));
+}
+
 // String or number dollars to a finite non-negative Number magnitude. Direction
 // (money out vs money in) is carried by which array a row sits in, not by sign, so
 // a negative value is not a valid magnitude here and returns null. Strips '$' and

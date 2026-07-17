@@ -11,7 +11,37 @@ import {
   centsEqual,
   matchTransfers,
   matchReimbursements,
+  isInternalTransferDescription,
 } from '../lib/matching.js';
+
+test('isInternalTransferDescription recognizes internal movements, not ordinary spend', () => {
+  // Corroboration is the autonomy gate for auto-converting a matched pair into a
+  // real transfer: only descriptions that clearly name an internal movement (a
+  // transfer between own accounts or a card payment) may be converted without asking.
+  assert.equal(isInternalTransferDescription('INTERNET TFR TO SAVINGS'), true);
+  assert.equal(isInternalTransferDescription('Online Transfer to checking'), true);
+  assert.equal(isInternalTransferDescription('APPLECARD GSBANK PAYMENT'), true);
+  assert.equal(isInternalTransferDescription('CHASE CREDIT CRD EPAY'), true);
+  assert.equal(isInternalTransferDescription('PAYMENT THANK YOU'), true);
+  assert.equal(isInternalTransferDescription('SYNCHRONY BANK CC PYMT'), true);
+  assert.equal(isInternalTransferDescription('INTERNET PAYMENT'), true);
+  // Ordinary merchant spend and real income must NOT read as internal.
+  assert.equal(isInternalTransferDescription('KROGER #1234'), false);
+  assert.equal(isInternalTransferDescription('BLENKO GLASS PAYROLL'), false);
+  assert.equal(isInternalTransferDescription('AMAZON MKTPL'), false);
+  // Deliberately EXCLUDED: phrases that read internal but routinely belong to real
+  // external spend or income. Auto-converting on these could delete a real payment or
+  // a real inbound transfer, so they must NOT corroborate (they queue for confirm).
+  assert.equal(isInternalTransferDescription('DOMINION ENERGY DIRECTPAY'), false);
+  assert.equal(isInternalTransferDescription('VERIZON WIRELESS AUTOPAY'), false);
+  assert.equal(isInternalTransferDescription('STATEMENT CREDIT'), false);
+  assert.equal(isInternalTransferDescription('ACH DEPOSIT INTERNET FROM JOHN'), false);
+  assert.equal(isInternalTransferDescription('AUTOMATIC PAYMENT SCHEDULED'), false);
+  // Defensive: non-strings never throw, always false.
+  assert.equal(isInternalTransferDescription(null), false);
+  assert.equal(isInternalTransferDescription(undefined), false);
+  assert.equal(isInternalTransferDescription(42), false);
+});
 
 test('parseAmount takes number or string dollars, rejects negative and junk', () => {
   assert.equal(parseAmount(1499.99), 1499.99);
