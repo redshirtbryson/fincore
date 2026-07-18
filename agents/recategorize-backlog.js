@@ -42,12 +42,16 @@ const DEPOSIT_RULES = [
   { kw: 'AUTOZONE', cat: 'Transfer' }, { kw: 'EBAY', cat: 'Transfer' },
   { kw: 'AMZNPHARMA', cat: 'Transfer' }, { kw: 'TCGPLAYER', cat: 'Transfer' },
 ];
-// WITHDRAWAL rules: structural only. Real internal movements out of the spend total.
+// WITHDRAWAL rules: structural only. Real internal movements out of the spend total,
+// plus a known business pass-through (see FACEBK).
 const WITHDRAWAL_RULES = [
   { kw: 'EXT TRANSFER FROM HUNTINGTON', cat: 'Transfer' }, // -> CNB Joint (own account)
   { kw: 'JPMORGAN CHASE EXT', cat: 'Debt Payment' },       // $593.20/mo auto-loan payment
   { kw: 'PAYPAL INST XFER', cat: 'Transfer' },
   { kw: 'APPLE CASH', cat: 'Transfer' },
+  // Meta ad spend billed to the personal card by accident, reimbursed via Redshirt
+  // disbursements: a business pass-through, not personal spend. Net-worth-neutral.
+  { kw: 'FACEBK', cat: 'Business Expense', tag: 'business-reimbursed' },
 ];
 
 function match(rules, text) {
