@@ -299,6 +299,7 @@ export async function getRecentTransactions({ types = ['withdrawal', 'deposit'],
               : null,
             counterparty: (type === 'deposit' ? s.source_name : s.destination_name) || '',
             category: s.category_name || '',
+            budgetId: s.budget_id != null && s.budget_id !== '0' ? String(s.budget_id) : null,
             tags: s.tags || [],
             currencyCode: s.currency_code || null,
             externalId: s.external_id || null,
@@ -342,6 +343,18 @@ export async function setCategory(txId, journalId, categoryName, { addTags = [],
     apply_rules: false,
     fire_webhooks: false,
     transactions: [update],
+  };
+  return api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+// Assign a split to a budget by name (tags and category untouched). Used by the
+// daily budget-assignment pass: categorized consumption withdrawals get their
+// category's budget so Firefly's budget bars cover the whole income stream.
+export async function setBudget(txId, journalId, budgetName) {
+  const body = {
+    apply_rules: false,
+    fire_webhooks: false,
+    transactions: [{ transaction_journal_id: String(journalId), budget_name: budgetName }],
   };
   return api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
 }

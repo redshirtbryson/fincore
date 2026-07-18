@@ -679,6 +679,58 @@ export async function runValuationPass(db, { now = new Date() } = {}) {
 // positions rows. Off when SCHWAB_APP_KEY is unset. Schwab refresh tokens expire
 // weekly; a token failure surfaces as an actionable flag plus a stale feed, never
 // a silent freeze.
+// Budget assignment (2026-07-18): map each categorized consumption withdrawal to its
+// category's Firefly budget so the budget bars cover the whole income stream. This
+// runs AFTER categorization (rules or model), so it catches everything with zero
+// per-merchant rule sprawl. Only fills EMPTY budget slots — the Hobby merchant rules
+// (and any manual assignment) always win. Non-consumption categories (Transfer,
+// Taxes, Construction, Investment, Refunds, Income, Business Expense) are never
+// budgeted. Debt Payment is deliberately ABSENT: that category mixes fixed debt
+// service with payoff strikes (observed ~$7k/mo during the paydown), which no fixed
+// budget can represent — strikes are the debt engine's domain. The genuinely fixed
+// payments (auto loan, Synchrony) reach the Fixed Obligations bucket via dedicated
+// strict merchant rules created by setup-budgets.js instead.
+const BUDGET_FOR_CATEGORY = {
+  Groceries: 'Groceries',
+  Dining: 'Dining',
+  Utilities: 'Utilities',
+  Personal: 'Personal',
+  Entertainment: 'Entertainment',
+  'Software/SaaS': 'Software/SaaS',
+  Healthcare: 'Healthcare',
+  Transport: 'Transport',
+  Housing: 'Housing',
+};
+const BUDGET_ASSIGN_CAP = Number(process.env.BUDGET_ASSIGN_CAP) > 0 ? Number(process.env.BUDGET_ASSIGN_CAP) : 100;
+
+export async function runBudgetAssignPass(db, { fetched = null } = {}) {
+  const { items } = fetched ?? (await firefly.getRecentTransactions({ types: ['withdrawal'], lookbackDays: 30 }));
+  const todo = items.filter((t) => t.type === 'withdrawal' && !t.budgetId && BUDGET_FOR_CATEGORY[t.category]);
+  const capped = todo.slice(0, BUDGET_ASSIGN_CAP);
+  const flags = [];
+  let assigned = 0;
+  for (const t of capped) {
+    try {
+      await firefly.setBudget(t.tx_id, t.journal_id, BUDGET_FOR_CATEGORY[t.category]);
+      assigned += 1;
+    } catch (e) {
+      flags.push(`budget assign failed for tx ${t.tx_id} (${t.category}): ${e.message}`);
+    }
+  }
+  if (todo.length > capped.length) flags.push(`budget assign cap (${BUDGET_ASSIGN_CAP}) reached; ${todo.length - capped.length} defer to tomorrow`);
+  if (assigned) {
+    audit(db, {
+      actor: 'budget-assign',
+      action: 'budget.assign',
+      target: 'firefly:transactions',
+      before: null,
+      after: { assigned, categories: [...new Set(capped.map((t) => t.category))] },
+      reversalHandle: null,
+    });
+  }
+  return { assigned, flags, line: assigned ? `Budgets: ${assigned} transaction(s) assigned.` : '' };
+}
+
 // Loan balance truing (baseline audit 2026-07-18): loan accounts (mortgage, auto)
 // are mapped mode='balance', never transaction-synced — feed lines on loans (escrow,
 // insurance) are not balance-affecting upstream, so syncing them corrupts the
@@ -871,6 +923,14 @@ export async function runPreSnapshotPasses(db, { matchingEnabled = true } = {}) 
     surfaceFlags(lines, 'Loans', l.flags);
   } catch (e) {
     lines.push(`Loan truing pass failed: ${e.message}`);
+  }
+
+  try {
+    const b = await runBudgetAssignPass(db);
+    if (b.line) lines.push(b.line);
+    surfaceFlags(lines, 'Budgets', b.flags);
+  } catch (e) {
+    lines.push(`Budget assign pass failed: ${e.message}`);
   }
 
   try {
