@@ -3,9 +3,10 @@
 // normalization all read from here; keep prompts/categorizer.md's list in sync.
 
 export const CATEGORIES = [
-  'Housing', 'Utilities', 'Groceries', 'Dining', 'Transport', 'Software/SaaS',
-  'Business Expense', 'Income', 'Refunds', 'Transfer', 'Debt Payment', 'Taxes',
-  'Investment', 'Healthcare', 'Entertainment', 'Personal', 'Uncategorized',
+  'Housing', 'Construction', 'Utilities', 'Groceries', 'Dining', 'Transport',
+  'Software/SaaS', 'Business Expense', 'Income', 'Refunds', 'Transfer',
+  'Debt Payment', 'Taxes', 'Investment', 'Healthcare', 'Entertainment', 'Personal',
+  'Uncategorized',
 ];
 
 export const CATEGORY_SET = new Set(CATEGORIES);

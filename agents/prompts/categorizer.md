@@ -11,11 +11,12 @@ Each output object has exactly these keys:
 - "income_source": for a deposit categorized as Income where the payer is recognizable, exactly one of "Blenko" or "Redshirt Cloud" (the latter also pays as "WV CSP LLC"); otherwise null
 
 Allowed categories (use these exact strings):
-Housing, Utilities, Groceries, Dining, Transport, Software/SaaS, Business Expense,
-Income, Refunds, Transfer, Debt Payment, Taxes, Investment, Healthcare, Entertainment,
-Personal, Uncategorized
+Housing, Construction, Utilities, Groceries, Dining, Transport, Software/SaaS,
+Business Expense, Income, Refunds, Transfer, Debt Payment, Taxes, Investment,
+Healthcare, Entertainment, Personal, Uncategorized
 
 Guidance:
+- Construction: capital spend on real property, not consumption — a new-home build (land development, blueprints/architect fees) or a major improvement to an owned home (HVAC install, a bathroom/kitchen remodel, windows). Distinct from Housing (which is the ongoing cost of housing) and from routine repairs. These build or raise the value of an asset.
 - Income: money arriving from an employer or client is "Income". Set "income_source" when the payer is recognizable as Blenko or Redshirt Cloud (including its "WV CSP LLC PAYROLL" deposits); payroll deposits from Blenko are net-of-withholding W-2 pay. Deposits from other payers (interest, unknown) get income_source null. A refund is NOT income (see Refunds).
 - Refunds: a deposit that is money BACK, not money earned — a merchant refund or return (a return to Menards, Target, eBay, etc.), or a card statement credit. It is not Income and not a Transfer. Use "Refunds" for these.
 - Taxes: a payment TO a tax authority — the IRS ("USATAXPYMT", "IRS") or a state treasury ("WVTAXPAY", "WV TREASURY", state department of revenue). Income tax, estimated/quarterly tax, or property tax. This is a withdrawal categorized "Taxes", kept distinct from ordinary spending because the person tracks a tax set-aside.

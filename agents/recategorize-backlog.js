@@ -61,6 +61,9 @@ const WITHDRAWAL_RULES = [
   // Meta ad spend billed to the personal card by accident, reimbursed via Redshirt
   // disbursements: a business pass-through, not personal spend. Net-worth-neutral.
   { kw: 'FACEBK', cat: 'Business Expense', tag: 'business-reimbursed' },
+  // Architect/home-design fees for the eventual new-home build -> Construction (capital,
+  // not consumption). The one-off checks are handled by set-construction.js.
+  { kw: 'ARCHITECTURAL DESIGNS', cat: 'Construction' },
 ];
 
 function match(rules, text) {
