@@ -13,6 +13,12 @@
 // auto-match; they all go to ambiguous for a human to confirm.
 
 const MATCHED_TAG_PREFIX = 'transfer-match:';
+// A leg the conversion pass already collapsed carries this tag. A converted card
+// payment becomes a withdrawal into the liability, which the transaction fetch returns
+// as a withdrawal again, so it must be excluded from re-matching or a re-run could pair
+// it with an unrelated same-amount deposit. (Converted asset->asset transfers become
+// type=transfer and are not fetched as withdrawals/deposits at all.)
+const CONVERTED_TAG_PREFIX = 'transfer-converted:';
 const REIMBURSED_TAG = 'reimbursed';
 
 // True when a description UNAMBIGUOUSLY names an internal money movement: a transfer
@@ -86,10 +92,13 @@ function parseDay(dateStr) {
   return Math.floor(ms / 86400000);
 }
 
-// True when a row already carries a 'transfer-match:' tag and so has been paired.
+// True when a row already carries a transfer tag (paired by the old tag-only scheme,
+// or collapsed by the conversion pass) and so must not be matched again.
 function alreadyTransferMatched(row) {
   const tags = Array.isArray(row.tags) ? row.tags : [];
-  return tags.some((t) => typeof t === 'string' && t.startsWith(MATCHED_TAG_PREFIX));
+  return tags.some(
+    (t) => typeof t === 'string' && (t.startsWith(MATCHED_TAG_PREFIX) || t.startsWith(CONVERTED_TAG_PREFIX))
+  );
 }
 
 // True when a reimbursable outlay has already been marked repaid.
@@ -221,12 +230,16 @@ function runMatch(withdrawals, deposits, { amountTolerance, isEligible, kind, re
 
 // Match internal transfers: one withdrawal from an own account against one deposit
 // into a different own account. A deposit is eligible when it lands within
-// [withdrawal.date - 1, withdrawal.date + dateWindowDays] (one day early allowed for
-// posting skew), the amounts are cents-equal within tolerance, the two own accounts
-// differ (a same-account pair is a correction, not a transfer), and neither side is
-// already tagged 'transfer-match:'. Returns { matches, ambiguous, unmatched, flags }.
+// [withdrawal.date - dateWindowDays, withdrawal.date + dateWindowDays] (a SYMMETRIC
+// window: a credit-card payment posts on the card up to several days BEFORE the bank
+// debits the paying account, so the deposit legitimately precedes the withdrawal), the
+// amounts are cents-equal within tolerance, the two own accounts differ (a same-account
+// pair is a correction, not a transfer), and neither side is already tagged as matched
+// or converted. Uniqueness on both sides still guards against a wrong pick, so a wider
+// window only ever turns an extra pair ambiguous, never mismatched. Returns
+// { matches, ambiguous, unmatched, flags }.
 export function matchTransfers(withdrawals, deposits, options = {}) {
-  const { dateWindowDays = 3, amountTolerance = 0 } = options;
+  const { dateWindowDays = 5, amountTolerance = 0 } = options;
 
   // Pre-filter already-matched rows out of the pool; they pass through untouched.
   const preMatched = [];
@@ -246,7 +259,7 @@ export function matchTransfers(withdrawals, deposits, options = {}) {
     kind: 'transfer',
     reason: 'multiple equal-amount transfer candidates in window; confirm the pair',
     isEligible: (w, d) => {
-      if (d.day < w.day - 1) return false;
+      if (d.day < w.day - dateWindowDays) return false;
       if (d.day > w.day + dateWindowDays) return false;
       if (w.row.account != null && d.row.account != null && w.row.account === d.row.account) {
         return false; // same own account: a correction, not a transfer

@@ -102,30 +102,35 @@ test('a deposit one day before the withdrawal is accepted as posting skew', () =
   assert.equal(r.matches[0].dateDelta, -1);
 });
 
-test('a deposit two days early is outside the skew allowance and does not match', () => {
+test('a deposit several days early still matches (a card posts before the bank debits)', () => {
+  // The window is symmetric: a credit-card payment shows on the card up to a few days
+  // before the paying account is debited, so the deposit legitimately precedes the
+  // withdrawal. Four days early is within the default 5-day window.
   const withdrawals = [
     { tx_id: 'w1', amount: 750, date: '2026-07-10', account: 'Checking', tags: [] },
   ];
   const deposits = [
-    { tx_id: 'd1', amount: 750, date: '2026-07-08', account: 'Savings', tags: [] },
+    { tx_id: 'd1', amount: 750, date: '2026-07-06', account: 'Credit - Discover', tags: [] },
   ];
   const r = matchTransfers(withdrawals, deposits);
-  assert.equal(r.matches.length, 0);
-  assert.equal(r.ambiguous.length, 0);
-  assert.equal(r.unmatched.length, 2); // both fall through untouched
+  assert.equal(r.matches.length, 1);
+  assert.equal(r.matches[0].dateDelta, -4);
 });
 
-test('a deposit past the forward window is rejected', () => {
-  const withdrawals = [
-    { tx_id: 'w1', amount: 100, date: '2026-07-01', account: 'Checking', tags: [] },
-  ];
-  const deposits = [
-    { tx_id: 'd1', amount: 100, date: '2026-07-05', account: 'Savings', tags: [] },
-  ];
-  // Default window is 3 days forward; 4 days out is too far.
-  const r = matchTransfers(withdrawals, deposits);
-  assert.equal(r.matches.length, 0);
-  assert.equal(r.unmatched.length, 2);
+test('a deposit outside the window (either side) is rejected', () => {
+  // Six days out, past the default 5-day symmetric window, on both sides.
+  const early = matchTransfers(
+    [{ tx_id: 'w1', amount: 100, date: '2026-07-10', account: 'Checking', tags: [] }],
+    [{ tx_id: 'd1', amount: 100, date: '2026-07-04', account: 'Savings', tags: [] }]
+  );
+  assert.equal(early.matches.length, 0);
+  assert.equal(early.unmatched.length, 2);
+  const late = matchTransfers(
+    [{ tx_id: 'w1', amount: 100, date: '2026-07-01', account: 'Checking', tags: [] }],
+    [{ tx_id: 'd1', amount: 100, date: '2026-07-07', account: 'Savings', tags: [] }]
+  );
+  assert.equal(late.matches.length, 0);
+  assert.equal(late.unmatched.length, 2);
 });
 
 test('a same-account withdrawal and deposit is a correction, not a transfer', () => {
@@ -175,6 +180,21 @@ test('an already transfer-matched side is excluded and passes through untouched'
   assert.equal(r.matches[0].withdrawal.tx_id, 'w2');
   assert.equal(r.ambiguous.length, 0);
   // w1 is returned untouched among the unmatched.
+  assert.ok(r.unmatched.some((row) => row.tx_id === 'w1'));
+});
+
+test('an already transfer-CONVERTED leg is excluded so re-runs are idempotent', () => {
+  // A converted card payment becomes a withdrawal into the liability, refetched as a
+  // withdrawal; without this exclusion a re-run could pair it with an unrelated
+  // same-amount deposit and convert it a second time.
+  const withdrawals = [
+    { tx_id: 'w1', amount: 500, date: '2026-07-01', account: 'Checking', tags: ['transfer-converted:1-2'] },
+  ];
+  const deposits = [
+    { tx_id: 'd1', amount: 500, date: '2026-07-01', account: 'Savings', tags: [] },
+  ];
+  const r = matchTransfers(withdrawals, deposits);
+  assert.equal(r.matches.length, 0);
   assert.ok(r.unmatched.some((row) => row.tx_id === 'w1'));
 });
 
