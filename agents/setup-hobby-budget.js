@@ -17,7 +17,7 @@ const apply = process.argv[2] === 'apply';
 const AMOUNT = Number(process.env.HOBBY_BUDGET_USD) > 0 ? Number(process.env.HOBBY_BUDGET_USD) : 150;
 const BUDGET_NAME = 'Hobby';
 // The observed hobby merchants (card shop, auctions, marketplaces, direct).
-const MERCHANTS = ['POWERUP', 'TCGPLAYER', 'POKEMON', 'WHATNOT'];
+const MERCHANTS = ['TCGPLAYER', 'POKEMON', 'WHATNOT']; // POWERUP is meal prep -> Groceries, not hobby
 
 async function fapi(p, o = {}) {
   const r = await fetch(BASE + '/api/v1' + p, { ...o, headers: H });

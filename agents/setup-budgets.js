@@ -19,7 +19,7 @@ const BUDGETS = [
   { name: 'Personal', amount: 1800, cats: ['Personal'] },
   { name: 'Dining', amount: 700, cats: ['Dining'] },
   { name: 'Utilities', amount: 650, cats: ['Utilities'] },
-  { name: 'Groceries', amount: 450, cats: ['Groceries'] },
+  { name: 'Groceries', amount: 750, cats: ['Groceries'] }, // Kroger ~$450 + PowerUp meal prep ~$300
   { name: 'Healthcare', amount: 250, cats: ['Healthcare'] },
   { name: 'Entertainment', amount: 175, cats: ['Entertainment'] },
   { name: 'Software/SaaS', amount: 175, cats: ['Software/SaaS'] },
