@@ -36,7 +36,7 @@ test('schema creates every SPEC 10.3 table', () => {
   ]) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
-  assert.equal(db.pragma('user_version', { simple: true }), 4);
+  assert.equal(db.pragma('user_version', { simple: true }), 5);
 });
 
 test('meta get/set round-trips and upserts', () => {

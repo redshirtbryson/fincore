@@ -20,6 +20,17 @@ import {
 import { fetchBalances, fetchTransactions, normalizeValuation, matchesValuationRule, parseMatchRules, overlapsFireflyAccount } from './simplefin.js';
 import { transformTransactions, epochWindow } from './sync.js';
 import { computeLoanTruing } from './loan-truing.js';
+import { computeAllocation, avalanche } from './allocation.js';
+import { monthlyInterest } from './debt-engine.js';
+import { taxOwed, checkpointStatus } from './tax-tracker.js';
+import { droughtStatus, bufferRunway } from './influx-watch.js';
+import {
+  seenInfluxJournalIds,
+  planInfluxCount,
+  influxDates,
+  recordInfluxAllocation,
+  setMeta,
+} from './store.js';
 
 const MATCH_LOOKBACK_DAYS = Number(process.env.MATCH_LOOKBACK_DAYS) > 0 ? Number(process.env.MATCH_LOOKBACK_DAYS) : 90;
 const MATCH_WRITE_CAP = Number(process.env.MATCH_WRITE_CAP) > 0 ? Number(process.env.MATCH_WRITE_CAP) : 20;
@@ -731,6 +742,141 @@ export async function runBudgetAssignPass(db, { fetched = null } = {}) {
   return { assigned, flags, line: assigned ? `Budgets: ${assigned} transaction(s) assigned.` : '' };
 }
 
+// --- Phase 6: deposit watcher + playbook heartbeat (playbook v2 is the spec) ---
+
+// Plan constants (playbook v2, blessed 2026-07-18). Values that are genuinely plan
+// policy live here, not in env: changing the plan should be a deliberate edit.
+const PLAN = {
+  startDate: '2026-07-18',
+  bufferTier1Target: 6000,
+  checkpointDate: '2027-01-15',
+  roth: { target: 7500, windowStart: '2027-01-15', deadline: '2027-04-15' },
+  taxRate: 0.30,
+  monthlyGap: 2950, // the Blenko-only structural gap, for buffer runway
+  // Strike debts by Firefly account id (Amazon is the daily driver, never struck).
+  strikeDebtIds: { 15: 'Discover', 14: 'Apple', 7: 'Affirm' },
+  influxMinAmount: 1000, // a Redshirt deposit below this is not an "influx"
+  // The migrated recurring billers: any of these charging Discover after the
+  // migration date is a straggler leaking new spend onto a frozen card.
+  stragglerAfter: '2026-08-01',
+  stragglerBillers: ['XFINITY', 'COMCAST', 'STATE FARM', 'AMERITAS', 'REPUBLIC SERVICES', 'USPS PO BOXES', 'YOUTUBEPREMIUM', 'GOOGLE *GOOGLE ONE', 'DOORDASHDASHPASS', 'DISCORD*', 'PRIVATEINTERNETACCESS', 'MICROSOFT', 'PATREON', 'NEXTDNS'],
+};
+
+export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {}) {
+  const lines = [];
+  const flags = [];
+  const todayStr = firefly.nyDateStr(now);
+
+  const { items } = fetched ?? (await firefly.getRecentTransactions({ lookbackDays: 30 }));
+  const [assets, liabilities] = await Promise.all([firefly.getAccounts('asset'), firefly.getAccounts('liabilities')]);
+  const byName = new Map(assets.map((a) => [a.name, a]));
+  const savings = byName.get('Huntington Bank - Savings');
+  const cnb = byName.get('CNB - Joint');
+  const cnbBase = Number(getMeta(db, 'plan_cnb_base') ?? 0);
+  const bufferBalance = cnb?.currentBalance !== undefined ? Math.max(0, cnb.currentBalance - cnbBase) : 0;
+  const debts = liabilities
+    .filter((l) => PLAN.strikeDebtIds[l.id])
+    .map((l) => ({ name: PLAN.strikeDebtIds[l.id], balance: Math.abs(l.currentBalance ?? 0), apr: l.interest ?? 0 }));
+
+  // 1. DEPOSIT WATCHER: new Redshirt influxes since the last run.
+  const seen = seenInfluxJournalIds(db);
+  const influxes = items.filter(
+    (t) =>
+      t.type === 'deposit' &&
+      t.tags.includes('income-source:redshirt-cloud') &&
+      parseAmount(t.amount) !== null &&
+      parseAmount(t.amount) >= PLAN.influxMinAmount &&
+      t.date >= PLAN.startDate &&
+      !seen.has(t.journal_id)
+  );
+  for (const dep of influxes) {
+    const amount = parseAmount(dep.amount);
+    // Running Redshirt total for the tax formula: seeded by seed-phase6.js, grown here.
+    const priorReceived = Number(getMeta(db, 'redshirt_received_2026') ?? 0);
+    const received = priorReceived + amount;
+    const influxIndex = planInfluxCount(db) + 1;
+    const alloc = computeAllocation({
+      deposit: { amount, date: dep.date },
+      influxIndex,
+      bufferBalance,
+      bufferTier1Target: PLAN.bufferTier1Target,
+      taxAccruedTotal: PLAN.taxRate * received,
+      taxHeld: savings?.currentBalance ?? 0,
+      checkpointDate: PLAN.checkpointDate,
+      roth: { funded: Number(getMeta(db, 'roth_2026_funded') ?? 0), ...PLAN.roth },
+      debts,
+    });
+    if (alloc.flags.length && alloc.tranches.length === 0) {
+      flags.push(`influx ${dep.date} $${amount.toFixed(2)}: allocation refused (${alloc.flags.join('; ')})`);
+      continue;
+    }
+    setMeta(db, 'redshirt_received_2026', String(received));
+    recordInfluxAllocation(db, {
+      depositDate: dep.date,
+      depositAmount: amount,
+      fireflyTxId: dep.tx_id,
+      fireflyJournalId: dep.journal_id,
+      influxIndex,
+      tranches: alloc.tranches,
+    });
+    const split = alloc.tranches.map((t) => `$${t.amount.toFixed(2)} -> ${t.destination}`).join('  |  ');
+    const msg = `INFLUX #${influxIndex} detected: $${amount.toFixed(2)} Redshirt on ${dep.date}. Playbook split: ${split}`;
+    lines.push(msg);
+    queueNotification(db, 'confirm', msg);
+  }
+
+  // 2. TAX TRACKER heartbeat line.
+  const received = Number(getMeta(db, 'redshirt_received_2026') ?? 0);
+  const tax = taxOwed({ redshirtReceivedTotal: received, rate: PLAN.taxRate, savingsBalance: savings?.currentBalance ?? 0 });
+  if (!tax.flag) {
+    const cp = checkpointStatus({ deficit: tax.deficit, today: todayStr, checkpointDate: PLAN.checkpointDate });
+    if (cp.message) lines.push(`Tax set-aside: ${cp.message}`);
+  }
+
+  // 3. DROUGHT + RUNWAY.
+  const dates = influxDates(db);
+  const drought = droughtStatus({ depositDates: dates, today: todayStr });
+  if (drought.level === 'watch' || drought.level === 'overdue') {
+    const runway = bufferRunway({ bufferBalance, monthlyGap: PLAN.monthlyGap });
+    lines.push(`Influx ${drought.level}: ${drought.message}${runway.weeks !== undefined ? ` Buffer runway ~${runway.weeks} weeks.` : ''}`);
+  }
+
+  // 4. DEBT heartbeat: living strike debts, avalanche order, interest burn.
+  const living = avalanche(debts);
+  if (living.length) {
+    const parts = living.map((d) => `${d.name} $${d.balance.toFixed(0)} (~$${(monthlyInterest(d.balance, d.apr) ?? 0).toFixed(0)}/mo)`);
+    lines.push(`Debts (avalanche): ${parts.join(' -> ')}. Next strike target: ${living[0].name}.`);
+  } else {
+    lines.push('Revolving strike debts: ALL DEAD.');
+  }
+
+  // 5. STRAGGLER WATCH: migrated billers still charging Discover.
+  const stragglers = items.filter(
+    (t) =>
+      t.type === 'withdrawal' &&
+      t.account === 'Credit - Discover' &&
+      t.date >= PLAN.stragglerAfter &&
+      PLAN.stragglerBillers.some((b) => t.description.toUpperCase().includes(b))
+  );
+  for (const s of stragglers) {
+    flags.push(`STRAGGLER on Discover: ${s.date} $${parseAmount(s.amount)?.toFixed(2)} ${s.description.slice(0, 40)} — migrate this biller to the Amazon card`);
+  }
+
+  // 6. BUDGET STATUS (current month).
+  try {
+    const monthStart = todayStr.slice(0, 8) + '01';
+    const budgets = await firefly.getBudgetStatus(monthStart, todayStr);
+    const over = budgets.filter((b) => b.limit && b.spent > b.limit);
+    const watch = budgets.filter((b) => b.limit && b.spent > 0.8 * b.limit && b.spent <= b.limit);
+    if (over.length) lines.push(`Budgets OVER: ${over.map((b) => `${b.name} $${b.spent.toFixed(0)}/$${b.limit.toFixed(0)}`).join(', ')}`);
+    if (watch.length) lines.push(`Budgets >80%: ${watch.map((b) => `${b.name} $${b.spent.toFixed(0)}/$${b.limit.toFixed(0)}`).join(', ')}`);
+  } catch (e) {
+    flags.push(`budget status unavailable: ${e.message}`);
+  }
+
+  return { influxesDetected: influxes.length, lines, flags };
+}
+
 // Loan balance truing (baseline audit 2026-07-18): loan accounts (mortgage, auto)
 // are mapped mode='balance', never transaction-synced — feed lines on loans (escrow,
 // insurance) are not balance-affecting upstream, so syncing them corrupts the
@@ -931,6 +1077,14 @@ export async function runPreSnapshotPasses(db, { matchingEnabled = true } = {}) 
     surfaceFlags(lines, 'Budgets', b.flags);
   } catch (e) {
     lines.push(`Budget assign pass failed: ${e.message}`);
+  }
+
+  try {
+    const p6 = await runPhase6Pass(db);
+    lines.push(...p6.lines);
+    surfaceFlags(lines, 'Playbook', p6.flags);
+  } catch (e) {
+    lines.push(`Playbook pass failed: ${e.message}`);
   }
 
   try {

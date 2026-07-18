@@ -234,6 +234,25 @@ const MIGRATIONS = [
   `
   ALTER TABLE simplefin_account_map ADD COLUMN mode TEXT NOT NULL DEFAULT 'txn';
   `,
+  // v5: Phase 6 (2026-07-18). Every detected Redshirt influx and its computed
+  // playbook allocation, durably: the deposit watcher inserts a row when a new
+  // WV CSP deposit lands, tranches are what the playbook waterfall computed at that
+  // moment (lib/allocation.js), and status tracks the notify/confirm flow
+  // (confirmation buttons arrive with Phase 13; v1 stops at 'notified';
+  // 'historical' marks pre-plan influxes seeded for cadence math).
+  `
+  CREATE TABLE influx_allocations (
+    id INTEGER PRIMARY KEY,
+    detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deposit_date TEXT NOT NULL,
+    deposit_amount REAL NOT NULL,
+    firefly_tx_id TEXT,
+    firefly_journal_id TEXT UNIQUE,
+    influx_index INTEGER NOT NULL,
+    tranches_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'notified', 'confirmed', 'historical'))
+  );
+  `,
 ];
 
 export function openStore(dbPath = process.env.FINCORE_DB_PATH || DEFAULT_PATH) {
@@ -553,6 +572,47 @@ export function markTxnSeen(db, txnId, fireflyTxId = null) {
   db.prepare(
     'INSERT INTO simplefin_seen (txn_id, firefly_tx_id) VALUES (?, ?) ON CONFLICT(txn_id) DO NOTHING'
   ).run(txnId, fireflyTxId);
+}
+
+// --- Phase 6: influx allocations (the deposit watcher's ledger) ---
+
+// Journal ids of influxes already seen (any status), so a re-fetched deposit is
+// never allocated twice. Mirrors the simplefin_seen idempotency pattern.
+export function seenInfluxJournalIds(db) {
+  return new Set(db.prepare('SELECT firefly_journal_id FROM influx_allocations WHERE firefly_journal_id IS NOT NULL').all().map((r) => r.firefly_journal_id));
+}
+
+// Count of PLAN influxes (excludes 'historical' pre-plan rows): the influx index
+// drives the boost schedule, so it starts at the plan, not at January.
+export function planInfluxCount(db) {
+  return db.prepare(`SELECT COUNT(*) n FROM influx_allocations WHERE status != 'historical'`).get().n;
+}
+
+// All influx deposit dates (historical + plan) for the cadence/drought math.
+export function influxDates(db) {
+  return db.prepare('SELECT deposit_date FROM influx_allocations ORDER BY deposit_date').all().map((r) => r.deposit_date);
+}
+
+export function recordInfluxAllocation(db, { depositDate, depositAmount, fireflyTxId = null, fireflyJournalId = null, influxIndex, tranches, status = 'notified', actor = 'deposit-watcher' }) {
+  auditedWrite(
+    db,
+    {
+      actor,
+      action: 'influx.allocate',
+      target: `influx:${fireflyJournalId ?? depositDate}`,
+      before: null,
+      after: { depositDate, depositAmount, influxIndex, tranches, status },
+      reversalHandle: null,
+    },
+    () =>
+      db
+        .prepare(
+          `INSERT INTO influx_allocations (deposit_date, deposit_amount, firefly_tx_id, firefly_journal_id, influx_index, tranches_json, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(firefly_journal_id) DO NOTHING`
+        )
+        .run(depositDate, depositAmount, fireflyTxId, fireflyJournalId, influxIndex, JSON.stringify(tranches), status)
+  );
 }
 
 // --- account valuations (the balance-oracle layer) ---

@@ -488,6 +488,24 @@ export async function deleteTransaction(id) {
   return api(`/transactions/${id}`, { method: 'DELETE' });
 }
 
+// Budget spent-vs-limit for a period (the daily heartbeat's budget lines). Firefly
+// returns spent as an array of per-currency sums when start/end are supplied.
+export async function getBudgetStatus(startStr, endStr) {
+  const j = await api(`/budgets?start=${startStr}&end=${endStr}&limit=100`);
+  const out = [];
+  for (const b of j?.data || []) {
+    const at = b.attributes || {};
+    const spent = Array.isArray(at.spent)
+      ? Math.abs(at.spent.reduce((n, s) => n + Number(s.sum || 0), 0))
+      : 0;
+    const limit = at.auto_budget_amount !== undefined && at.auto_budget_amount !== null && at.auto_budget_amount !== ''
+      ? Number(at.auto_budget_amount)
+      : null;
+    out.push({ name: at.name || '', spent, limit });
+  }
+  return out;
+}
+
 // Re-point one surviving leg so an internal movement stops double-counting. The bank
 // feed produces two independent legs for one movement (a withdrawal into an expense
 // account plus a deposit out of a revenue account); the caller deletes the redundant

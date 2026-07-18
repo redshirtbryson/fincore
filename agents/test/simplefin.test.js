@@ -115,7 +115,7 @@ test('migrations reach the current version with all tables present', () => {
   // Simulate the deployed prod db: open (migrates to current), then confirm both
   // the new table and the old ones coexist and user_version is 2.
   const db = openStore(':memory:');
-  assert.equal(db.pragma('user_version', { simple: true }), 4);
+  assert.equal(db.pragma('user_version', { simple: true }), 5);
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
     .all()
