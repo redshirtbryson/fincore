@@ -25,18 +25,20 @@ const BUDGETS = [
   { name: 'Software/SaaS', amount: 175, cats: ['Software/SaaS'] },
   { name: 'Transport', amount: 100, cats: ['Transport'] },
   { name: 'Housing', amount: 100, cats: ['Housing'] },
-  // Fixed debt service ONLY (auto loan $593 + Synchrony ~$217; mortgage payment to be
-  // added once its source account is identified). Assigned by the strict rules below,
-  // NOT by category — the Debt Payment category also contains payoff strikes (~$7k/mo
-  // observed during the paydown), which no fixed budget can represent.
-  { name: 'Fixed Obligations', amount: 850, cats: [] },
+  // Fixed obligations: mortgage $947.29 (1st) + auto $593.20 (3rd) + Synchrony
+  // ~$217 + State Farm ~$115. Assigned by the strict rules below, NOT by category —
+  // the Debt Payment category also contains payoff strikes (~$7k/mo observed during
+  // the paydown), which no fixed budget can represent.
+  { name: 'Fixed Obligations', amount: 1900, cats: [] },
   // Hobby ($150) is created by setup-hobby-budget.js; listed here read-only.
 ];
 
 // Strict two-trigger rules assigning the known FIXED payments to Fixed Obligations.
 const FIXED_RULES = [
-  { kw: 'JPMORGAN CHASE EXT', note: 'auto loan $593.20/mo' },
+  { kw: 'JPMORGAN CHASE CHASE ACH', note: 'mortgage $947.29/mo (1st)' },
+  { kw: 'JPMORGAN CHASE EXT', note: 'auto loan $593.20/mo (3rd)' },
   { kw: 'SYNCHRONY BANK', note: 'Synchrony $50/wk' },
+  { kw: 'STATE FARM', note: 'insurance ~$115/mo' },
 ];
 
 async function fapi(p, o = {}) {
