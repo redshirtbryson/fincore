@@ -825,6 +825,44 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
     queueNotification(db, 'confirm', msg);
   }
 
+  // 1b. WINDFALL WATCHER: a large deposit that is NOT a Redshirt influx (crypto sale
+  // proceeds, a big misc check). Crucially different treatment: NO tax tranche — the
+  // 30% formula applies to Redshirt income only (a loss-harvest sale owes nothing).
+  // The suggestion is goal-stack routing (current avalanche target), and the human
+  // decides; recorded in influx_allocations (influx_index 0, kind 'windfall') so it
+  // is never re-flagged.
+  const windfalls = items.filter(
+    (t) =>
+      t.type === 'deposit' &&
+      !t.tags.some((x) => x.startsWith('income-source:')) &&
+      !['Transfer', 'Refunds'].includes(t.category) &&
+      parseAmount(t.amount) !== null &&
+      parseAmount(t.amount) >= PLAN.influxMinAmount &&
+      t.date >= PLAN.startDate &&
+      !seen.has(t.journal_id)
+  );
+  for (const dep of windfalls) {
+    const amount = parseAmount(dep.amount);
+    const living = avalanche(debts);
+    const bufferShort = Math.max(0, PLAN.bufferTier1Target - bufferBalance);
+    const target = living.length ? living[0].name : 'CNB - Joint (reservoir)';
+    const suggestion = living.length
+      ? `goal stack says: $${amount.toFixed(2)} -> ${target} (${living[0].apr}% APR${bufferShort > 0 ? `; alternative: top buffer $${bufferShort.toFixed(0)} first` : ''})`
+      : `goal stack says: -> CNB - Joint (reservoir)`;
+    recordInfluxAllocation(db, {
+      depositDate: dep.date,
+      depositAmount: amount,
+      fireflyTxId: dep.tx_id,
+      fireflyJournalId: dep.journal_id,
+      influxIndex: 0,
+      tranches: [{ destination: target, amount, purpose: 'windfall suggestion', kind: 'windfall' }],
+      status: 'notified',
+    });
+    const msg = `WINDFALL detected: $${amount.toFixed(2)} on ${dep.date} (${dep.description.slice(0, 30)}) — not a Redshirt influx, NO tax tranche. ${suggestion}`;
+    lines.push(msg);
+    queueNotification(db, 'confirm', msg);
+  }
+
   // 2. TAX TRACKER heartbeat line.
   const received = Number(getMeta(db, 'redshirt_received_2026') ?? 0);
   const tax = taxOwed({ redshirtReceivedTotal: received, rate: PLAN.taxRate, savingsBalance: savings?.currentBalance ?? 0 });
