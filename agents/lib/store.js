@@ -253,6 +253,16 @@ const MIGRATIONS = [
     status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'notified', 'confirmed', 'historical'))
   );
   `,
+  // v6: Phase 13 (2026-07-18). The notification queue becomes a real confirm flow:
+  // payload_json carries the machine-executable pending action (e.g. a matched
+  // transfer pair awaiting Confirm), delivered_at marks "posted to Discord", and
+  // resolved_at/resolution record what the human chose. The daily passes write;
+  // the Discord bot consumes.
+  `
+  ALTER TABLE notification_queue ADD COLUMN payload_json TEXT;
+  ALTER TABLE notification_queue ADD COLUMN resolved_at TEXT;
+  ALTER TABLE notification_queue ADD COLUMN resolution TEXT;
+  `,
 ];
 
 export function openStore(dbPath = process.env.FINCORE_DB_PATH || DEFAULT_PATH) {
@@ -572,6 +582,41 @@ export function markTxnSeen(db, txnId, fireflyTxId = null) {
   db.prepare(
     'INSERT INTO simplefin_seen (txn_id, firefly_tx_id) VALUES (?, ?) ON CONFLICT(txn_id) DO NOTHING'
   ).run(txnId, fireflyTxId);
+}
+
+// --- Phase 13: notification queue consumption (the Discord confirm flow) ---
+
+// Queue items not yet posted to Discord, oldest first, bounded so a backlog cannot
+// flood the channel in one poll.
+export function undeliveredNotifications(db, { limit = 5 } = {}) {
+  return db
+    .prepare('SELECT id, severity, message, payload_json FROM notification_queue WHERE delivered_at IS NULL ORDER BY id LIMIT ?')
+    .all(limit);
+}
+
+export function markNotificationDelivered(db, id) {
+  db.prepare(`UPDATE notification_queue SET delivered_at = datetime('now') WHERE id = ? AND delivered_at IS NULL`).run(id);
+}
+
+// The human's verdict on a delivered item. Audited: a confirm/dismiss is itself an
+// action on the record (SPEC 15).
+export function resolveNotification(db, id, resolution, { actor }) {
+  const row = db.prepare('SELECT id, message, resolution FROM notification_queue WHERE id = ?').get(id);
+  if (!row) throw new Error(`notification ${id} not found`);
+  if (row.resolution) throw new Error(`notification ${id} already resolved (${row.resolution})`);
+  db.prepare(`UPDATE notification_queue SET resolved_at = datetime('now'), resolution = ? WHERE id = ?`).run(resolution, id);
+  audit(db, {
+    actor,
+    action: `notification.${resolution}`,
+    target: `notification_queue:${id}`,
+    before: { message: row.message },
+    after: { resolution },
+    reversalHandle: null,
+  });
+}
+
+export function getNotification(db, id) {
+  return db.prepare('SELECT * FROM notification_queue WHERE id = ?').get(id) ?? null;
 }
 
 // --- Phase 6: influx allocations (the deposit watcher's ledger) ---

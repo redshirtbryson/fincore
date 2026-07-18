@@ -227,6 +227,30 @@ export async function setOpeningBalance(id, { openingBalance, openingBalanceDate
   return res;
 }
 
+// Revert a split to a plain withdrawal into a NAMED expense account — the undo
+// executor's primitive for reversing a transfer conversion (convertInternalLeg can
+// only re-point to own-account ids; an undo must restore the original expense
+// counterparty by name). Optionally restores the prior category. Read-back verified
+// like every money-grade destructive write.
+export async function convertToWithdrawal(txId, journalId, { sourceId, destinationName, restoreCategory = null, tags = [] }) {
+  const update = {
+    transaction_journal_id: String(journalId),
+    type: 'withdrawal',
+    source_id: String(sourceId),
+    destination_name: destinationName || 'Unknown',
+    tags,
+  };
+  if (restoreCategory !== null) update.category_name = restoreCategory;
+  const body = { apply_rules: false, fire_webhooks: false, transactions: [update] };
+  const res = await api(`/transactions/${txId}`, { method: 'PUT', body: JSON.stringify(body) });
+  const split = await getSplit(txId, journalId);
+  const gotType = String(split?.type || '').toLowerCase();
+  if (gotType !== 'withdrawal') {
+    throw new Error(`convertToWithdrawal verification failed for tx ${txId}/${journalId}: type=${gotType || '(none)'}`);
+  }
+  return res;
+}
+
 // Firefly's own net worth figure (summary endpoint), used as the independent
 // reference for reconciliation. Returns a number or null when unavailable or not
 // USD; the reconcile engine treats null as a flagged cannot-reconcile, never a pass.

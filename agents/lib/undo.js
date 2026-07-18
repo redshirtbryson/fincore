@@ -17,7 +17,7 @@
 //
 // Firefly op shapes (executor maps op.type -> lib/firefly.js call):
 //   { type: 'firefly.createTransaction', args: {...createTransaction args...} }
-//   { type: 'firefly.convertInternalLeg', txId, journalId, args: {...} }
+//   { type: 'firefly.convertToWithdrawal', txId, journalId, args: {...} }
 //   { type: 'firefly.setCategory', txId, journalId, category, addTags, removeTags }
 //   { type: 'firefly.deleteTransaction', id }
 // Store op shape (executor maps to a lib/store.js write):

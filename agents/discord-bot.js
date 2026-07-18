@@ -3,7 +3,7 @@
 // A button click or a "cat <txId> <journalId> <category>" reply writes the category
 // to Firefly and creates a merchant rule so the model is not consulted for it again.
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import * as firefly from './lib/firefly.js';
 import { CATEGORY_SET, CATEGORIES, detectIncomeSource } from './lib/categories.js';
 
@@ -28,11 +28,17 @@ const DENIED = 'Not authorized to categorize. This bot only accepts writes from 
 // unavailable the bot still works and says so, rather than dying on import.
 let auditStore = null;
 let storeLib = null;
+let undoLib = null;
+let undoExec = null;
+let qualityLib = null;
 try {
   storeLib = await import('./lib/store.js');
   auditStore = storeLib.openStore();
+  undoLib = await import('./lib/undo.js');
+  undoExec = await import('./lib/undo-exec.js');
+  qualityLib = await import('./lib/quality.js');
 } catch (e) {
-  console.warn('fincore.db unavailable; confirmations will not be audited:', e.message);
+  console.warn('fincore.db / undo machinery unavailable; confirm/undo disabled:', e.message);
 }
 
 // SPEC section 15: confirmed actions land in the audit log too. Loud on failure,
@@ -93,8 +99,46 @@ async function resolve({ txId, journalId, category, userId }) {
   });
 }
 
+// --- Phase 13: notification queue consumer -----------------------------------
+// The daily passes queue durable items (confirm-tier pairs, influx splits, flags);
+// this poller posts undelivered ones to the finance channel with buttons. Executable
+// payloads (kind 'transfer-pair') get Confirm/Dismiss; everything else, Acknowledge.
+
+const POLL_MS = 5 * 60 * 1000;
+
+function buttonsFor(n) {
+  const payload = n.payload_json ? JSON.parse(n.payload_json) : null;
+  const row = new ActionRowBuilder();
+  if (payload?.kind === 'transfer-pair') {
+    row.addComponents(
+      new ButtonBuilder().setCustomId(`nq-confirm|${n.id}`).setLabel('Confirm').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`nq-dismiss|${n.id}`).setLabel('Dismiss').setStyle(ButtonStyle.Secondary)
+    );
+  } else {
+    row.addComponents(new ButtonBuilder().setCustomId(`nq-ack|${n.id}`).setLabel('Acknowledge').setStyle(ButtonStyle.Secondary));
+  }
+  return row;
+}
+
+async function deliverQueued() {
+  if (!auditStore || !CHANNEL) return;
+  try {
+    const pending = storeLib.undeliveredNotifications(auditStore, { limit: 5 });
+    if (!pending.length) return;
+    const channel = await client.channels.fetch(CHANNEL);
+    for (const n of pending) {
+      await channel.send({ content: `**[${n.severity}]** ${n.message}\n\`#${n.id}\``, components: [buttonsFor(n)] });
+      storeLib.markNotificationDelivered(auditStore, n.id);
+    }
+  } catch (e) {
+    console.warn('notification delivery failed:', e.message);
+  }
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`fincore discord-bot online as ${c.user.tag}`);
+  deliverQueued();
+  setInterval(deliverQueued, POLL_MS);
 });
 
 // Button clicks
@@ -127,6 +171,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: `Reply in this channel with: \`cat ${txId} ${journalId} <Category>\`\nAllowed: ${CATEGORIES.join(', ')}`,
         ephemeral: true,
       });
+    } else if (kind === 'nq-confirm' || kind === 'nq-dismiss' || kind === 'nq-ack') {
+      // Phase 13: resolve a queued notification. Confirm on an executable payload
+      // runs the pending action through the SAME machinery the autonomous path uses
+      // (convertPairToTransfer: audited, read-back-verified) — the human supplies
+      // only the judgment the gate refused to automate.
+      if (!auditStore) { await interaction.reply({ content: 'Store unavailable.', ephemeral: true }); return; }
+      const nid = Number(parts[1]);
+      const n = storeLib.getNotification(auditStore, nid);
+      if (!n) { await interaction.reply({ content: `Notification #${nid} not found.`, ephemeral: true }); return; }
+      if (n.resolution) { await interaction.reply({ content: `#${nid} already resolved (${n.resolution}).`, ephemeral: true }); return; }
+      await interaction.deferUpdate();
+      const actor = `discord:${interaction.user.id}`;
+      if (kind === 'nq-confirm') {
+        const payload = n.payload_json ? JSON.parse(n.payload_json) : null;
+        if (payload?.kind === 'transfer-pair') {
+          const liabilities = await firefly.getAccounts('liabilities');
+          const liabilityIds = new Set(liabilities.map((a) => String(a.id)));
+          await qualityLib.convertPairToTransfer(auditStore, payload.m, { actor, liabilityIds });
+        }
+        storeLib.resolveNotification(auditStore, nid, 'confirmed', { actor });
+        await interaction.editReply({ content: `**[resolved: confirmed]** ${n.message}\n\`#${nid}\` — executed and audited.`, components: [] });
+      } else {
+        storeLib.resolveNotification(auditStore, nid, kind === 'nq-dismiss' ? 'dismissed' : 'acknowledged', { actor });
+        await interaction.editReply({ content: `**[resolved: ${kind === 'nq-dismiss' ? 'dismissed' : 'acknowledged'}]** ${n.message}\n\`#${nid}\``, components: [] });
+      }
+    } else if (kind === 'undo-run') {
+      if (!auditStore || !undoExec) { await interaction.reply({ content: 'Undo machinery unavailable.', ephemeral: true }); return; }
+      const auditId = Number(parts[1]);
+      await interaction.deferUpdate();
+      const entry = undoExec.loadAuditEntry(auditStore, auditId);
+      const plan = entry ? undoLib.planReversal(entry) : null;
+      if (!entry || !plan?.reversible) {
+        await interaction.editReply({ content: `Cannot undo #${auditId}: ${plan ? plan.describe : 'audit entry not found'}`, components: [] });
+        return;
+      }
+      const res = await undoExec.executeReversal({ firefly, store: storeLib }, auditStore, entry, plan, { actor: `discord:${interaction.user.id}` });
+      await interaction.editReply({ content: `Undone action #${auditId} (${entry.action}). ${res.opsExecuted} operation(s) reversed; new audit #${res.auditId}.`, components: [] });
     }
   } catch (e) {
     console.error('interaction error:', e);
@@ -139,9 +220,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // Reply-parse fallback:  cat <txId> <journalId> <Category words>
+// Phase 13 commands: `undo <audit-id>` and `pending`.
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (message.channelId !== CHANNEL) return;
+
+  // `undo <audit-id>`: plan the reversal, show it, arm a confirm button. The
+  // destructive execution only ever happens behind the button press.
+  const undoMatch = message.content.trim().match(/^undo\s+(\d+)$/i);
+  if (undoMatch) {
+    if (!isAuthorized(message.author.id)) { await message.reply(DENIED).catch(() => {}); return; }
+    if (!auditStore || !undoExec) { await message.reply('Undo machinery unavailable.'); return; }
+    const auditId = Number(undoMatch[1]);
+    const entry = undoExec.loadAuditEntry(auditStore, auditId);
+    if (!entry) { await message.reply(`No audit action #${auditId}.`); return; }
+    const plan = undoLib.planReversal(entry);
+    if (!plan.reversible) { await message.reply(`Cannot auto-undo #${auditId} (${entry.action}): ${plan.describe}`); return; }
+    const warn = plan.warnings?.length ? `\n⚠ ${plan.warnings.join(' ')}` : '';
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`undo-run|${auditId}`).setLabel('Confirm undo').setStyle(ButtonStyle.Danger)
+    );
+    await message.reply({ content: `Undo #${auditId} (${entry.action}): ${plan.describe}${warn}`, components: [row] });
+    return;
+  }
+
+  // `pending`: queue status at a glance.
+  if (/^pending$/i.test(message.content.trim())) {
+    if (!auditStore) { await message.reply('Store unavailable.'); return; }
+    const un = auditStore.prepare('SELECT COUNT(*) n FROM notification_queue WHERE resolution IS NULL AND delivered_at IS NOT NULL').get().n;
+    const und = auditStore.prepare('SELECT COUNT(*) n FROM notification_queue WHERE delivered_at IS NULL').get().n;
+    await message.reply(`Queue: ${un} delivered awaiting resolution, ${und} not yet posted (next poll within 5 min).`);
+    return;
+  }
+
   const m = message.content.trim().match(/^cat\s+(\d+)\s+(\d+)\s+(.+)$/i);
   if (!m) return;
   if (!isAuthorized(message.author.id)) {

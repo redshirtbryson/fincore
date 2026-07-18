@@ -46,15 +46,21 @@ function autonomyThreshold(db) {
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_AUTONOMY_THRESHOLD;
 }
 
-// Queue a durable item for the (future) confirmation flow. Deduped on the exact
-// undelivered message so daily reruns do not stack copies; Phase 8's digest and
-// confirm loop consume this table.
-function queueNotification(db, severity, message) {
+// Queue a durable item for the Discord confirm flow (Phase 13 consumes this table).
+// Deduped on the exact unresolved message so daily reruns do not stack copies.
+// payload carries the machine-executable pending action, e.g. { kind:
+// 'transfer-pair', m } for a matched pair the bot can convert on Confirm; absent
+// payload means acknowledge-only.
+function queueNotification(db, severity, message, { payload = null } = {}) {
   const exists = db
-    .prepare('SELECT 1 FROM notification_queue WHERE message = ? AND delivered_at IS NULL')
+    .prepare('SELECT 1 FROM notification_queue WHERE message = ? AND resolution IS NULL')
     .get(message);
   if (!exists) {
-    db.prepare('INSERT INTO notification_queue (severity, message) VALUES (?, ?)').run(severity, message);
+    db.prepare('INSERT INTO notification_queue (severity, message, payload_json) VALUES (?, ?, ?)').run(
+      severity,
+      message,
+      payload === null ? null : JSON.stringify(payload)
+    );
   }
 }
 
@@ -450,10 +456,14 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
     }
     const verdict = autoConvertVerdict(m, { multiSplit, liabilityIds });
     if (!verdict.ok) {
+      // Executable payload: on Confirm, the Discord bot runs convertPairToTransfer
+      // with exactly these legs — the human supplies the judgment the gate refused
+      // to automate, the machinery stays identical (SPEC 15 confirmed-write tier).
       queueNotification(
         db,
         'confirm',
-        `Confirm transfer pair (${verdict.reason}): ${pairLabel(m.withdrawal, m.deposit)}`
+        `Confirm transfer pair (${verdict.reason}): ${pairLabel(m.withdrawal, m.deposit)}`,
+        { payload: { kind: 'transfer-pair', m: { withdrawal: legSnapshot(m.withdrawal), deposit: legSnapshot(m.deposit), dateDelta: m.dateDelta } } }
       );
       queuedForConfirm += 1;
       continue;
