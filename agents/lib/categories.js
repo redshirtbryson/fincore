@@ -4,8 +4,8 @@
 
 export const CATEGORIES = [
   'Housing', 'Utilities', 'Groceries', 'Dining', 'Transport', 'Software/SaaS',
-  'Business Expense', 'Income', 'Transfer', 'Debt Payment', 'Investment',
-  'Healthcare', 'Entertainment', 'Personal', 'Uncategorized',
+  'Business Expense', 'Income', 'Refunds', 'Transfer', 'Debt Payment', 'Taxes',
+  'Investment', 'Healthcare', 'Entertainment', 'Personal', 'Uncategorized',
 ];
 
 export const CATEGORY_SET = new Set(CATEGORIES);

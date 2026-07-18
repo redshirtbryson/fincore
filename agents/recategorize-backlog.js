@@ -27,7 +27,8 @@ async function fapi(p, o = {}) {
 // A rule is { kw, cat, tag? }. kw is matched case-insensitively as a substring of the
 // text (source_name preferred for deposits, else description; description for
 // withdrawals). First match wins, so order specific-before-general.
-// DEPOSIT rules: real income (Income + a source tag) first, then non-income -> Transfer.
+// DEPOSIT rules: real income (Income + a source tag) first, then non-income (money-back
+// -> Refunds, own-account movements -> Transfer).
 const DEPOSIT_RULES = [
   { kw: 'BLENKO', cat: 'Income', tag: 'income-source:blenko' },
   { kw: 'WV CSP', cat: 'Income', tag: 'income-source:redshirt-cloud' },
@@ -35,22 +36,28 @@ const DEPOSIT_RULES = [
   { kw: 'MOBILE CHECK DEPOSIT', cat: 'Income' },        // earned income, source unspecified
   { kw: 'INTEREST PAYMENT', cat: 'Income' },            // bank interest (trivial)
   // Not income -> Transfer (neutral; excluded from both income and spend):
-  { kw: 'RETURN', cat: 'Transfer' },                    // merchant refunds
-  { kw: 'STATEMENT CREDIT', cat: 'Transfer' },          // card credits/rewards
+  // Money BACK, not income and not a transfer -> Refunds:
+  { kw: 'RETURN', cat: 'Refunds' },                     // merchant refunds/returns
+  { kw: 'STATEMENT CREDIT', cat: 'Refunds' },           // card credits/rewards
+  { kw: 'MENARDS', cat: 'Refunds' }, { kw: 'TARGET', cat: 'Refunds' },
+  { kw: 'AUTOZONE', cat: 'Refunds' }, { kw: 'EBAY', cat: 'Refunds' },
+  { kw: 'AMZNPHARMA', cat: 'Refunds' }, { kw: 'TCGPLAYER', cat: 'Refunds' },
+  // Genuine internal movements into an own account -> Transfer (neutral):
   { kw: 'CASH APP', cat: 'Transfer' },                  // money from self
   { kw: 'ONLINE TFR HUNTINGTON', cat: 'Transfer' },     // CNB side of a Huntington->CNB transfer
   { kw: 'TRANSFER FROM', cat: 'Transfer' },             // internal transfer into an own account
-  { kw: 'MENARDS', cat: 'Transfer' }, { kw: 'TARGET', cat: 'Transfer' },
-  { kw: 'AUTOZONE', cat: 'Transfer' }, { kw: 'EBAY', cat: 'Transfer' },
-  { kw: 'AMZNPHARMA', cat: 'Transfer' }, { kw: 'TCGPLAYER', cat: 'Transfer' },
 ];
 // WITHDRAWAL rules: structural only. Real internal movements out of the spend total,
-// plus a known business pass-through (see FACEBK).
+// tax payments, plus a known business pass-through (see FACEBK).
 const WITHDRAWAL_RULES = [
   { kw: 'EXT TRANSFER FROM HUNTINGTON', cat: 'Transfer' }, // -> CNB Joint (own account)
   { kw: 'JPMORGAN CHASE EXT', cat: 'Debt Payment' },       // $593.20/mo auto-loan payment
   { kw: 'PAYPAL INST XFER', cat: 'Transfer' },
   { kw: 'APPLE CASH', cat: 'Transfer' },
+  // Tax payments to federal/state authorities -> Taxes (distinct; feeds the set-aside).
+  { kw: 'USATAXPYMT', cat: 'Taxes' },                     // IRS federal
+  { kw: 'WVTAXPAY', cat: 'Taxes' },                       // WV state
+  { kw: 'WVTREASURY', cat: 'Taxes' },                     // WV treasury
   // Meta ad spend billed to the personal card by accident, reimbursed via Redshirt
   // disbursements: a business pass-through, not personal spend. Net-worth-neutral.
   { kw: 'FACEBK', cat: 'Business Expense', tag: 'business-reimbursed' },
