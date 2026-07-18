@@ -29,13 +29,19 @@ const SPECS = [
   { file: 'credit-amazon.csv', accountName: 'Credit - Amazon Prime', dateCol: 'Transaction Date', amountCol: 'Amount', descCol: 'Description', negate: false },
   { file: 'credit-apple.csv', accountName: 'Credit - Apple', dateCol: 'Transaction Date', amountCol: 'Amount (USD)', descCol: 'Description', negate: true },
   { file: 'credit-discover.csv', accountName: 'Credit - Discover', dateCol: 'Trans. Date', amountCol: 'Amount', descCol: 'Description', negate: true },
+  // CNB joint: ISO dates, a separate Credit/Debit column (positive amounts), and NOT
+  // synced -- so import the full history (endDate null), not just up to the boundary.
+  { file: 'cnb-joint.csv', accountName: 'CNB - Joint', dateCol: 'Processed Date', amountCol: 'Amount', descCol: 'Description', directionCol: 'Credit or Debit', dateFormat: 'iso', endDate: null },
 ];
 
 function loadSpec(spec) {
   const full = path.join(DIR, spec.file);
   if (!fs.existsSync(full)) return { ...spec, missing: true, creates: [], flags: [`file not found: ${full}`], counts: {} };
   const rows = parseCsv(fs.readFileSync(full, 'utf8'));
-  const { creates, flags, counts } = transformRows(rows, { ...spec, endDate: END_DATE });
+  // A spec may pin its own endDate (null = import everything, e.g. an unsynced account);
+  // otherwise fall back to the global backfill boundary.
+  const endDate = Object.prototype.hasOwnProperty.call(spec, 'endDate') ? spec.endDate : END_DATE;
+  const { creates, flags, counts } = transformRows(rows, { ...spec, endDate });
   return { ...spec, rowCount: rows.length, creates, flags, counts };
 }
 
@@ -107,7 +113,13 @@ async function rollback() {
 
 async function main() {
   const mode = process.argv[2] || 'dry-run';
-  const loaded = SPECS.map(loadSpec);
+  // Optional file filter: process only specs whose filename contains this substring,
+  // so a single new account (e.g. cnb-joint.csv) can be imported without re-touching
+  // files already backfilled.
+  const only = process.argv[3];
+  const specs = only ? SPECS.filter((s) => s.file.includes(only)) : SPECS;
+  if (only && specs.length === 0) { console.error(`no spec matches "${only}"`); process.exit(1); }
+  const loaded = specs.map(loadSpec);
 
   if (mode === 'delete') { await rollback(); return; }
 

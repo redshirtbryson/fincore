@@ -38,6 +38,8 @@ const DEPOSIT_RULES = [
   { kw: 'RETURN', cat: 'Transfer' },                    // merchant refunds
   { kw: 'STATEMENT CREDIT', cat: 'Transfer' },          // card credits/rewards
   { kw: 'CASH APP', cat: 'Transfer' },                  // money from self
+  { kw: 'ONLINE TFR HUNTINGTON', cat: 'Transfer' },     // CNB side of a Huntington->CNB transfer
+  { kw: 'TRANSFER FROM', cat: 'Transfer' },             // internal transfer into an own account
   { kw: 'MENARDS', cat: 'Transfer' }, { kw: 'TARGET', cat: 'Transfer' },
   { kw: 'AUTOZONE', cat: 'Transfer' }, { kw: 'EBAY', cat: 'Transfer' },
   { kw: 'AMZNPHARMA', cat: 'Transfer' }, { kw: 'TCGPLAYER', cat: 'Transfer' },

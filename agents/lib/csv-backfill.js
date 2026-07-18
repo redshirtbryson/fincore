@@ -62,6 +62,22 @@ export function parseUsDate(str) {
   return `${yr}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+// ISO 'YYYY-MM-DD' (1- or 2-digit month/day tolerated) to a validated 'YYYY-MM-DD',
+// or null. Same calendar validation and timezone-safety as parseUsDate; used for
+// exports (e.g. CNB) that ship ISO dates rather than US month/day/year.
+export function parseIsoDate(str) {
+  if (typeof str !== 'string') return null;
+  const m = str.trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!m) return null;
+  const yr = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const check = new Date(Date.UTC(yr, mo - 1, d));
+  if (check.getUTCFullYear() !== yr || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return null;
+  return `${yr}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
 // Signed decimal string/number to a finite Number, or null. Strips $ and commas.
 export function parseAmount(v) {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
@@ -78,12 +94,19 @@ export function parseAmount(v) {
 //            false when negative = money out (Huntington, Amazon/Chase). After
 //            negation the convention is uniform: negative cents = withdrawal from
 //            the account (money out / debt up), positive = deposit (money in / debt down).
+//   directionCol: when the export carries direction in a SEPARATE column with a
+//            positive-magnitude amount (e.g. CNB's "Credit or Debit"), name it here.
+//            row[directionCol] === debitValue => withdrawal, === creditValue => deposit;
+//            anything else is flagged and skipped. Takes precedence over negate.
+//   dateFormat: 'us' (default, M/D/Y) or 'iso' (Y-M-D).
 //   endDate: 'YYYY-MM-DD'; rows strictly after it are skipped so the sync owns the
-//            recent window (no CSV-vs-sync double-count across the boundary).
+//            recent window (no CSV-vs-sync double-count across the boundary). Pass null
+//            for a CSV-only account (e.g. CNB, not synced) to import everything.
 // Returns { creates, flags, counts }. Each create is account-neutral
 // ({ type, date, amount, description, counterparty }); the caller attaches the
 // resolved Firefly account id as source (withdrawal) or destination (deposit).
-export function transformRows(rows, { dateCol, amountCol, descCol, negate = false, endDate = null } = {}) {
+export function transformRows(rows, { dateCol, amountCol, descCol, negate = false, endDate = null, directionCol = null, debitValue = 'Debit', creditValue = 'Credit', dateFormat = 'us' } = {}) {
+  const parseDate = dateFormat === 'iso' ? parseIsoDate : parseUsDate;
   const creates = [];
   const flags = [];
   let skippedAfterEnd = 0;
@@ -94,7 +117,7 @@ export function transformRows(rows, { dateCol, amountCol, descCol, negate = fals
 
   rows.forEach((row, idx) => {
     const rowNum = idx + 2; // header is line 1
-    const date = parseUsDate(row[dateCol]);
+    const date = parseDate(row[dateCol]);
     if (!date) {
       flags.push(`row ${rowNum}: unparseable date "${row[dateCol]}"; skipped`);
       return;
@@ -108,7 +131,20 @@ export function transformRows(rows, { dateCol, amountCol, descCol, negate = fals
       flags.push(`row ${rowNum}: unparseable amount "${row[amountCol]}"; skipped`);
       return;
     }
-    const cents = Math.round((negate ? -raw : raw) * 100);
+    let cents;
+    if (directionCol) {
+      // Direction from a separate column; amount is a positive magnitude.
+      const dir = (row[directionCol] || '').trim().toLowerCase();
+      const mag = Math.round(Math.abs(raw) * 100);
+      if (dir === debitValue.toLowerCase()) cents = -mag;
+      else if (dir === creditValue.toLowerCase()) cents = mag;
+      else {
+        flags.push(`row ${rowNum} (${date}): unknown direction "${row[directionCol]}"; skipped`);
+        return;
+      }
+    } else {
+      cents = Math.round((negate ? -raw : raw) * 100);
+    }
     if (cents === 0) {
       flags.push(`row ${rowNum} (${date}): zero amount; skipped`);
       return;

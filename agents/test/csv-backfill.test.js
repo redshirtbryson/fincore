@@ -1,7 +1,40 @@
 // Tests for the CSV backfill transform.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCsv, parseUsDate, parseAmount, transformRows } from '../lib/csv-backfill.js';
+import { parseCsv, parseUsDate, parseIsoDate, parseAmount, transformRows } from '../lib/csv-backfill.js';
+
+test('parseIsoDate validates YYYY-MM-DD and the calendar', () => {
+  assert.equal(parseIsoDate('2026-01-05'), '2026-01-05');
+  assert.equal(parseIsoDate('2026-7-1'), '2026-07-01'); // 1-digit month/day tolerated
+  assert.equal(parseIsoDate('2026-02-31'), null);       // not a real date
+  assert.equal(parseIsoDate('07/16/2026'), null);       // wrong format
+  assert.equal(parseIsoDate(''), null);
+  assert.equal(parseIsoDate(null), null);
+});
+
+test('transformRows reads direction from a separate column with positive magnitudes', () => {
+  // CNB shape: ISO dates, a "Credit or Debit" column, always-positive Amount.
+  const rows = [
+    { 'Processed Date': '2026-06-16', Description: 'ONLINE TFR HUNTINGTON BANK', 'Credit or Debit': 'Credit', Amount: '6000.00' },
+    { 'Processed Date': '2026-06-30', Description: 'CHECK 5051', 'Credit or Debit': 'Debit', Amount: '6139.27' },
+    { 'Processed Date': '2026-06-24', Description: 'MYSTERY', 'Credit or Debit': 'Sideways', Amount: '5.00' },
+  ];
+  const { creates, flags, counts } = transformRows(rows, {
+    dateCol: 'Processed Date', amountCol: 'Amount', descCol: 'Description',
+    directionCol: 'Credit or Debit', dateFormat: 'iso', endDate: null,
+  });
+  assert.equal(creates.length, 2);
+  const credit = creates.find((c) => c.description === 'ONLINE TFR HUNTINGTON BANK');
+  const debit = creates.find((c) => c.description === 'CHECK 5051');
+  assert.equal(credit.type, 'deposit');   // Credit = money in
+  assert.equal(credit.amount, '6000.00');
+  assert.equal(debit.type, 'withdrawal'); // Debit = money out
+  assert.equal(debit.amount, '6139.27');
+  assert.equal(counts.deposits, 1);
+  assert.equal(counts.withdrawals, 1);
+  assert.equal(flags.length, 1); // the unknown-direction row is flagged, not guessed
+  assert.match(flags[0], /unknown direction "Sideways"/);
+});
 
 test('parseCsv handles headers, quoted fields, commas-in-quotes, escaped quotes', () => {
   const text =
