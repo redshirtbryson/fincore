@@ -225,6 +225,15 @@ const MIGRATIONS = [
     ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+  // v4: per-account sync mode (2026-07-18). Loan accounts (mortgage, auto) must not
+  // receive feed TRANSACTIONS: escrow/insurance lines are not balance-affecting on
+  // the feed, so syncing them corrupts the liability balance (found in the baseline
+  // audit: a $34.14 escrow line pushed the mortgage $34.14 past the feed's figure).
+  // mode 'txn' = transactions sync (banks, cards); mode 'balance' = balance-truing
+  // only (loans): the daily pass trues the opening balance to the feed's balance.
+  `
+  ALTER TABLE simplefin_account_map ADD COLUMN mode TEXT NOT NULL DEFAULT 'txn';
+  `,
 ];
 
 export function openStore(dbPath = process.env.FINCORE_DB_PATH || DEFAULT_PATH) {
@@ -465,14 +474,42 @@ export function touchFeed(db, feed, { status = 'ok' } = {}) {
 
 // --- SimpleFIN sync: account map and seen-ledger ---
 
-export function getSyncAccountMap(db) {
+// mode: null returns every active entry; 'txn' or 'balance' filters to that mode.
+// Transaction sync and freshness judge only 'txn' entries; the loan balance-truing
+// pass consumes 'balance' entries.
+export function getSyncAccountMap(db, { mode = null } = {}) {
   const map = new Map();
-  for (const row of db
-    .prepare('SELECT simplefin_id, firefly_account_id, firefly_account_name FROM simplefin_account_map WHERE active = 1')
-    .all()) {
-    map.set(row.simplefin_id, { fireflyAccountId: row.firefly_account_id, fireflyAccountName: row.firefly_account_name });
+  const rows = mode
+    ? db
+        .prepare('SELECT simplefin_id, firefly_account_id, firefly_account_name, mode FROM simplefin_account_map WHERE active = 1 AND mode = ?')
+        .all(mode)
+    : db
+        .prepare('SELECT simplefin_id, firefly_account_id, firefly_account_name, mode FROM simplefin_account_map WHERE active = 1')
+        .all();
+  for (const row of rows) {
+    map.set(row.simplefin_id, { fireflyAccountId: row.firefly_account_id, fireflyAccountName: row.firefly_account_name, mode: row.mode });
   }
   return map;
+}
+
+// Switch a mapped account between transaction-sync and balance-truing. Audited with
+// the store reversal-handle convention like every other map write.
+export function setSyncAccountMode(db, { simplefinId, mode, actor = 'sync-map' }) {
+  if (mode !== 'txn' && mode !== 'balance') throw new RangeError(`invalid sync mode "${mode}"`);
+  const before = db.prepare('SELECT * FROM simplefin_account_map WHERE simplefin_id = ?').get(simplefinId) ?? null;
+  if (!before) throw new Error(`no sync-map entry for ${simplefinId}`);
+  auditedWrite(
+    db,
+    {
+      actor,
+      action: 'simplefin_account_map.mode',
+      target: `simplefin_account_map:${simplefinId}`,
+      before,
+      after: { mode },
+      reversalHandle: reversalHandleFor('simplefin_account_map', simplefinId, before),
+    },
+    () => db.prepare(`UPDATE simplefin_account_map SET mode = ?, updated = datetime('now') WHERE simplefin_id = ?`).run(mode, simplefinId)
+  );
 }
 
 export function upsertSyncAccountMapEntry(db, { simplefinId, fireflyAccountId, fireflyAccountName = null, actor = 'sync-map' }) {

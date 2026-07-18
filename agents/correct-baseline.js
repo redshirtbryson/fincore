@@ -28,7 +28,7 @@ async function main() {
   const outcome = await computeOutcomes(db);
 
   console.log(`Baseline locked ${state.lockedAt}; correction window open until ${state.windowEndsAt}.`);
-  console.log(`\nCurrent baseline:  net worth ${money(before?.net_worth)}  | DTI ${before?.dti ?? 'n/a'}%`);
+  console.log(`\nCurrent baseline:  net worth ${money(before?.net_worth)}  | DTI ${before?.dti != null ? (before.dti * 100).toFixed(1) + '%' : 'n/a'}`);
   console.log('\nRecomputed now (includes New Home):');
   console.log(formatOutcome(outcome));
   if (outcome.flags?.length) { console.log('\nFLAGS present — resolve before correcting:'); for (const f of outcome.flags) console.log('  - ' + f); }

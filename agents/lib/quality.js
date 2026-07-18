@@ -19,6 +19,7 @@ import {
 } from './store.js';
 import { fetchBalances, fetchTransactions, normalizeValuation, matchesValuationRule, parseMatchRules, overlapsFireflyAccount } from './simplefin.js';
 import { transformTransactions, epochWindow } from './sync.js';
+import { computeLoanTruing } from './loan-truing.js';
 
 const MATCH_LOOKBACK_DAYS = Number(process.env.MATCH_LOOKBACK_DAYS) > 0 ? Number(process.env.MATCH_LOOKBACK_DAYS) : 90;
 const MATCH_WRITE_CAP = Number(process.env.MATCH_WRITE_CAP) > 0 ? Number(process.env.MATCH_WRITE_CAP) : 20;
@@ -317,7 +318,7 @@ const SYNC_CAP = Number(process.env.SYNC_CAP) > 0 ? Number(process.env.SYNC_CAP)
 // Idempotent three ways: the seen-ledger, Firefly's duplicate-hash guard, and
 // failed creates are NOT marked seen so tomorrow retries them.
 export async function runSyncPass(db, { now = new Date() } = {}) {
-  const map = getSyncAccountMap(db);
+  const map = getSyncAccountMap(db, { mode: 'txn' });
   if (!process.env.SIMPLEFIN_ACCESS_URL || map.size === 0) {
     return { enabled: false, created: 0, flags: map.size === 0 && process.env.SIMPLEFIN_ACCESS_URL ? ['sync map empty: run node sync-map.js <importer-config.json> to seed it'] : [], line: '' };
   }
@@ -543,7 +544,7 @@ export async function runFreshnessPass(db, { now = new Date() } = {}) {
   // must not alarm as stale forever just because their only entry is an opening
   // balance. With no map seeded, freshness has nothing to judge, which is correct:
   // freshness is meaningless without knowing which accounts have a live feed.
-  const feedIds = new Set([...getSyncAccountMap(db).values()].map((m) => String(m.fireflyAccountId)));
+  const feedIds = new Set([...getSyncAccountMap(db, { mode: 'txn' }).values()].map((m) => String(m.fireflyAccountId)));
   const accounts = (await firefly.getAccounts('asset')).filter(
     (a) => a.active !== false && feedIds.has(String(a.id))
   );
@@ -678,6 +679,78 @@ export async function runValuationPass(db, { now = new Date() } = {}) {
 // positions rows. Off when SCHWAB_APP_KEY is unset. Schwab refresh tokens expire
 // weekly; a token failure surfaces as an actionable flag plus a stale feed, never
 // a silent freeze.
+// Loan balance truing (baseline audit 2026-07-18): loan accounts (mortgage, auto)
+// are mapped mode='balance', never transaction-synced — feed lines on loans (escrow,
+// insurance) are not balance-affecting upstream, so syncing them corrupts the
+// liability. Instead, true each loan's OPENING balance so its computed balance lands
+// exactly on the feed's balance (opening_new = opening_old + (feed - computed); math
+// in lib/loan-truing.js, guarded: sign flips and drifts beyond the sanity cap are
+// flagged, never written). Audited per account with a reversal handle.
+const LOAN_TRUING_CAP = Number(process.env.LOAN_TRUING_CAP) > 0 ? Number(process.env.LOAN_TRUING_CAP) : 2500;
+
+export async function runLoanBalancePass(db) {
+  const entries = getSyncAccountMap(db, { mode: 'balance' });
+  if (entries.size === 0 || !process.env.SIMPLEFIN_ACCESS_URL) {
+    return { enabled: false, trued: 0, flags: [], line: '' };
+  }
+
+  const accounts = await fetchBalances();
+  const bySfid = new Map(accounts.map((a) => [String(a.id), a]));
+  const flags = [];
+  let trued = 0;
+  let noop = 0;
+
+  for (const [sfid, m] of entries) {
+    const label = m.fireflyAccountName || m.fireflyAccountId;
+    try {
+      const feed = bySfid.get(sfid);
+      if (!feed) {
+        flags.push(`loan truing: ${label} not in the SimpleFIN payload; feed missing or re-auth needed`);
+        continue;
+      }
+      const detail = await firefly.getAccountDetail(m.fireflyAccountId);
+      const verdict = computeLoanTruing({
+        feedBalance: feed.balance,
+        computedBalance: detail.currentBalance,
+        opening: detail.openingBalance,
+        capDollars: LOAN_TRUING_CAP,
+      });
+      if (verdict.action === 'noop') {
+        noop += 1;
+        continue;
+      }
+      if (verdict.action === 'flag') {
+        flags.push(`loan truing: ${label}: ${verdict.reason}`);
+        continue;
+      }
+      await firefly.setOpeningBalance(m.fireflyAccountId, {
+        openingBalance: verdict.openingNew,
+        openingBalanceDate: detail.openingBalanceDate,
+        name: detail.name,
+      });
+      audit(db, {
+        actor: 'loan-truing',
+        action: 'loan.balance.true',
+        target: `firefly:account:${m.fireflyAccountId}`,
+        before: { opening: detail.openingBalance, computed: detail.currentBalance },
+        after: { opening: verdict.openingNew, feedBalance: Number(feed.balance), drift: verdict.drift },
+        reversalHandle: reversalHandleFor('firefly_opening_balance', String(m.fireflyAccountId), {
+          opening: detail.openingBalance,
+        }),
+      });
+      trued += 1;
+    } catch (e) {
+      // Per-item: one failing loan cannot sink the pass (SPEC 11).
+      flags.push(`loan truing failed for ${label}: ${e.message}`);
+    }
+  }
+
+  const parts = [];
+  if (trued) parts.push(`${trued} loan balance(s) trued to the feed`);
+  if (noop && !trued && !flags.length) parts.push(`${noop} loan balance(s) already exact`);
+  return { enabled: true, trued, flags, line: parts.length ? `Loans: ${parts.join(', ')}.` : '' };
+}
+
 export async function runSchwabPass(db, { now = new Date() } = {}) {
   if (!process.env.SCHWAB_APP_KEY) return { ingested: 0, flags: [], line: '', enabled: false };
   const schwab = await import('./schwab.js');
@@ -790,6 +863,14 @@ export async function runPreSnapshotPasses(db, { matchingEnabled = true } = {}) 
     surfaceFlags(lines, 'Valuations', v.flags);
   } catch (e) {
     lines.push(`Valuation pass failed: ${e.message}`);
+  }
+
+  try {
+    const l = await runLoanBalancePass(db);
+    if (l.line) lines.push(l.line);
+    surfaceFlags(lines, 'Loans', l.flags);
+  } catch (e) {
+    lines.push(`Loan truing pass failed: ${e.message}`);
   }
 
   try {

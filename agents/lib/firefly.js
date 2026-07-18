@@ -198,6 +198,35 @@ export async function getAccounts(type) {
   return accounts;
 }
 
+// One account with its opening-balance fields, for the loan balance-truing pass.
+export async function getAccountDetail(id) {
+  const j = await api(`/accounts/${id}`);
+  const at = j?.data?.attributes || {};
+  return {
+    id: String(j?.data?.id ?? id),
+    name: at.name || '',
+    currentBalance: at.current_balance === undefined || at.current_balance === null || at.current_balance === '' ? null : Number(at.current_balance),
+    openingBalance: at.opening_balance === undefined || at.opening_balance === null || at.opening_balance === '' ? null : Number(at.opening_balance),
+    openingBalanceDate: (at.opening_balance_date || '').slice(0, 10) || null,
+  };
+}
+
+// Set an account's opening balance (the loan balance-truing write). Firefly's
+// account PUT requires the name; the opening date is preserved. Read-back verified:
+// a 200 is weaker evidence than the stored value for a money-grade write.
+export async function setOpeningBalance(id, { openingBalance, openingBalanceDate, name }) {
+  const body = { name, opening_balance: String(openingBalance) };
+  if (openingBalanceDate) body.opening_balance_date = openingBalanceDate;
+  const res = await api(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  const after = await getAccountDetail(id);
+  if (after.openingBalance === null || Math.round(after.openingBalance * 100) !== Math.round(Number(openingBalance) * 100)) {
+    throw new Error(
+      `setOpeningBalance verification failed for account ${id}: wanted ${openingBalance}, stored ${after.openingBalance ?? '(none)'}`
+    );
+  }
+  return res;
+}
+
 // Firefly's own net worth figure (summary endpoint), used as the independent
 // reference for reconciliation. Returns a number or null when unavailable or not
 // USD; the reconcile engine treats null as a flagged cannot-reconcile, never a pass.
