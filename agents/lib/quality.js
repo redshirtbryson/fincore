@@ -453,7 +453,15 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
   // never auto-deleted, regardless of dollar amount.
   const multiSplit = multiSplitTxIds(txns);
   const liabilityIds = new Set((await firefly.getAccounts('liabilities')).map((a) => String(a.id)));
-  const tRes = matchTransfers(withdrawals, deposits);
+  // A withdrawal ON a liability account is card SPENDING, never the sending side of
+  // an internal transfer (money does not leave a card into a bank account outside
+  // exotic cases like cash advances, unseen in this ledger). Excluding them from the
+  // transfer pool kills a whole class of coincidence pairs — e.g. a $150 card
+  // purchase matching a $150 payroll deposit ("Discover -> CNB", 2026-07-19) — at
+  // the source, before they can even reach the ambiguous queue. Legitimate flows are
+  // unaffected: card PAYMENTS pair a bank-side withdrawal with a card-side deposit.
+  const transferableWithdrawals = withdrawals.filter((w) => !liabilityIds.has(w.accountId));
+  const tRes = matchTransfers(transferableWithdrawals, deposits);
   flags.push(...tRes.flags);
   for (const m of tRes.matches) {
     if (written >= MATCH_WRITE_CAP) {
