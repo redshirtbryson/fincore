@@ -122,7 +122,7 @@ test('buildHeartbeat sections the summary and colors by attention', () => {
   const calm = buildHeartbeat('Fincore daily: 3 auto-categorized, 0 need your review.\nSnapshot: net worth $10.00, DTI 30.0%.');
   assert.equal(calm.embeds[0].title, 'Fincore daily');
   assert.ok(calm.embeds[0].description.startsWith('3 auto-categorized'));
-  assert.ok(calm.embeds[0].description.includes('- Snapshot:'));
+  assert.ok(calm.embeds[0].description.includes('📊 Snapshot:')); // emoji sectioning (2026-07-19)
   assert.equal(calm.embeds[0].color, 0x2e8b57);
 
   const alarmed = buildHeartbeat('Fincore daily: 0 auto-categorized, 0 need your review.\nSTALE FEEDS: bank:1:Checking (9d)');

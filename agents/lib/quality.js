@@ -20,6 +20,7 @@ import {
 import { fetchBalances, fetchTransactions, normalizeValuation, matchesValuationRule, parseMatchRules, overlapsFireflyAccount } from './simplefin.js';
 import { transformTransactions, epochWindow } from './sync.js';
 import { computeLoanTruing } from './loan-truing.js';
+import { usd, usd0 } from './format.js';
 import { computeAllocation, avalanche } from './allocation.js';
 import { monthlyInterest } from './debt-engine.js';
 import { taxOwed, checkpointStatus } from './tax-tracker.js';
@@ -70,7 +71,7 @@ function queueNotification(db, severity, message, { payload = null } = {}) {
 }
 
 function pairLabel(w, d) {
-  return `${w.date} ${w.account} -> ${d.account} $${w.amount} (tx ${w.tx_id}/${d.tx_id})`;
+  return `${w.date} ${w.account} -> ${d.account} ${usd(w.amount)} (tx ${w.tx_id}/${d.tx_id})`;
 }
 
 // Complete half-written pairs from a prior crashed run. A transfer-match tag names
@@ -538,7 +539,7 @@ export async function runMatchingPass(db, { fetched = null } = {}) {
     queueNotification(
       db,
       'confirm',
-      `Ambiguous match for tx ${a.item.tx_id} (${a.item.date}, $${a.item.amount}): ${a.candidates.length} candidates. ${a.reason}`
+      `Ambiguous match for tx ${a.item.tx_id} (${a.item.date}, ${usd(a.item.amount)}): ${a.candidates.length} candidates. ${a.reason}`
     );
   }
   const ambiguous = tRes.ambiguous.length + rRes.ambiguous.length;
@@ -822,7 +823,7 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
       debts,
     });
     if (alloc.flags.length && alloc.tranches.length === 0) {
-      flags.push(`influx ${dep.date} $${amount.toFixed(2)}: allocation refused (${alloc.flags.join('; ')})`);
+      flags.push(`influx ${dep.date} ${usd(amount)}: allocation refused (${alloc.flags.join('; ')})`);
       continue;
     }
     setMeta(db, 'redshirt_received_2026', String(received));
@@ -834,8 +835,8 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
       influxIndex,
       tranches: alloc.tranches,
     });
-    const split = alloc.tranches.map((t) => `$${t.amount.toFixed(2)} -> ${t.destination}`).join('  |  ');
-    const msg = `INFLUX #${influxIndex} detected: $${amount.toFixed(2)} Redshirt on ${dep.date}. Playbook split: ${split}`;
+    const split = alloc.tranches.map((t) => `${usd(t.amount)} -> ${t.destination}`).join('  |  ');
+    const msg = `INFLUX #${influxIndex} detected: ${usd(amount)} Redshirt on ${dep.date}. Playbook split: ${split}`;
     lines.push(msg);
     queueNotification(db, 'confirm', msg);
   }
@@ -862,7 +863,7 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
     const bufferShort = Math.max(0, PLAN.bufferTier1Target - bufferBalance);
     const target = living.length ? living[0].name : 'CNB - Joint (reservoir)';
     const suggestion = living.length
-      ? `goal stack says: $${amount.toFixed(2)} -> ${target} (${living[0].apr}% APR${bufferShort > 0 ? `; alternative: top buffer $${bufferShort.toFixed(0)} first` : ''})`
+      ? `goal stack says: ${usd(amount)} -> ${target} (${living[0].apr}% APR${bufferShort > 0 ? `; alternative: top buffer ${usd0(bufferShort)} first` : ''})`
       : `goal stack says: -> CNB - Joint (reservoir)`;
     recordInfluxAllocation(db, {
       depositDate: dep.date,
@@ -873,7 +874,7 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
       tranches: [{ destination: target, amount, purpose: 'windfall suggestion', kind: 'windfall' }],
       status: 'notified',
     });
-    const msg = `WINDFALL detected: $${amount.toFixed(2)} on ${dep.date} (${dep.description.slice(0, 30)}) — not a Redshirt influx, NO tax tranche. ${suggestion}`;
+    const msg = `WINDFALL detected: ${usd(amount)} on ${dep.date} (${dep.description.slice(0, 30)}) — not a Redshirt influx, NO tax tranche. ${suggestion}`;
     lines.push(msg);
     queueNotification(db, 'confirm', msg);
   }
@@ -897,7 +898,7 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
   // 4. DEBT heartbeat: living strike debts, avalanche order, interest burn.
   const living = avalanche(debts);
   if (living.length) {
-    const parts = living.map((d) => `${d.name} $${d.balance.toFixed(0)} (~$${(monthlyInterest(d.balance, d.apr) ?? 0).toFixed(0)}/mo)`);
+    const parts = living.map((d) => `${d.name} ${usd0(d.balance)} (~${usd0(monthlyInterest(d.balance, d.apr) ?? 0)}/mo)`);
     lines.push(`Debts (avalanche): ${parts.join(' -> ')}. Next strike target: ${living[0].name}.`);
   } else {
     lines.push('Revolving strike debts: ALL DEAD.');
@@ -912,7 +913,7 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
       PLAN.stragglerBillers.some((b) => t.description.toUpperCase().includes(b))
   );
   for (const s of stragglers) {
-    flags.push(`STRAGGLER on Discover: ${s.date} $${parseAmount(s.amount)?.toFixed(2)} ${s.description.slice(0, 40)} — migrate this biller to the Amazon card`);
+    flags.push(`STRAGGLER on Discover: ${s.date} ${usd(parseAmount(s.amount))} ${s.description.slice(0, 40)} — migrate this biller to the Amazon card`);
   }
 
   // 6. BUDGET STATUS (current month).
@@ -921,8 +922,8 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
     const budgets = await firefly.getBudgetStatus(monthStart, todayStr);
     const over = budgets.filter((b) => b.limit && b.spent > b.limit);
     const watch = budgets.filter((b) => b.limit && b.spent > 0.8 * b.limit && b.spent <= b.limit);
-    if (over.length) lines.push(`Budgets OVER: ${over.map((b) => `${b.name} $${b.spent.toFixed(0)}/$${b.limit.toFixed(0)}`).join(', ')}`);
-    if (watch.length) lines.push(`Budgets >80%: ${watch.map((b) => `${b.name} $${b.spent.toFixed(0)}/$${b.limit.toFixed(0)}`).join(', ')}`);
+    if (over.length) lines.push(`Budgets OVER: ${over.map((b) => `${b.name} ${usd0(b.spent)}/${usd0(b.limit)}`).join(', ')}`);
+    if (watch.length) lines.push(`Budgets >80%: ${watch.map((b) => `${b.name} ${usd0(b.spent)}/${usd0(b.limit)}`).join(', ')}`);
   } catch (e) {
     flags.push(`budget status unavailable: ${e.message}`);
   }

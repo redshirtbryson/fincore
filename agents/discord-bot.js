@@ -6,6 +6,15 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import * as firefly from './lib/firefly.js';
 import { CATEGORY_SET, CATEGORIES, detectIncomeSource } from './lib/categories.js';
+import { tidyMoney } from './lib/format.js';
+
+// Queue-post presentation: severity emoji + tidied money (stored messages may
+// predate the formatting fix and carry long-precision amounts).
+const SEVERITY_EMOJI = { confirm: '🔔', error: '🚨' };
+function renderNotification(n) {
+  const emoji = SEVERITY_EMOJI[n.severity] || 'ℹ️';
+  return `${emoji} ${tidyMoney(n.message)}\n-# \`#${n.id}\``;
+}
 
 const CHANNEL = process.env.DISCORD_FINANCE_CHANNEL_ID;
 
@@ -127,7 +136,7 @@ async function deliverQueued() {
     if (!pending.length) return;
     const channel = await client.channels.fetch(CHANNEL);
     for (const n of pending) {
-      await channel.send({ content: `**[${n.severity}]** ${n.message}\n\`#${n.id}\``, components: [buttonsFor(n)] });
+      await channel.send({ content: renderNotification(n), components: [buttonsFor(n)] });
       storeLib.markNotificationDelivered(auditStore, n.id);
     }
   } catch (e) {
@@ -191,10 +200,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await qualityLib.convertPairToTransfer(auditStore, payload.m, { actor, liabilityIds });
         }
         storeLib.resolveNotification(auditStore, nid, 'confirmed', { actor });
-        await interaction.editReply({ content: `**[resolved: confirmed]** ${n.message}\n\`#${nid}\` — executed and audited.`, components: [] });
+        await interaction.editReply({ content: `✅ ${tidyMoney(n.message)}\n-# \`#${nid}\` · confirmed — executed and audited`, components: [] });
       } else {
         storeLib.resolveNotification(auditStore, nid, kind === 'nq-dismiss' ? 'dismissed' : 'acknowledged', { actor });
-        await interaction.editReply({ content: `**[resolved: ${kind === 'nq-dismiss' ? 'dismissed' : 'acknowledged'}]** ${n.message}\n\`#${nid}\``, components: [] });
+        await interaction.editReply({ content: `${kind === 'nq-dismiss' ? '🚫' : '☑️'} ${tidyMoney(n.message)}\n-# \`#${nid}\` · ${kind === 'nq-dismiss' ? 'dismissed' : 'acknowledged'}`, components: [] });
       }
     } else if (kind === 'undo-run') {
       if (!auditStore || !undoExec) { await interaction.reply({ content: 'Undo machinery unavailable.', ephemeral: true }); return; }

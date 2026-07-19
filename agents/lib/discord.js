@@ -3,6 +3,7 @@
 import 'dotenv/config';
 import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v10';
+import { tidyMoney } from './format.js';
 
 let restClient = null;
 function rest() {
@@ -83,19 +84,49 @@ export function buildAsk(item, guess) {
   };
 }
 
+// Emoji per known line prefix, so the heartbeat scans as sections instead of a wall
+// of uniform bullets. First match wins; unknown lines get a plain bullet. Ordered
+// specific-before-general (e.g. 'Budgets OVER' before 'Budgets').
+const LINE_EMOJI = [
+  [/^(Snapshot|Net worth)/i, '📊'],
+  [/^INFLUX/i, '💰'],
+  [/^WINDFALL/i, '💰'],
+  [/^Tax/i, '🧾'],
+  [/^Debts|^Revolving/i, '💳'],
+  [/^Budgets OVER/i, '🚨'],
+  [/^Budget/i, '📉'],
+  [/^Influx (watch|overdue)/i, '⏳'],
+  [/^STRAGGLER|^Playbook flag: STRAGGLER/i, '🚨'],
+  [/^STALE|^Freshness/i, '⚠️'],
+  [/^Matching flag|^Sync flag|^Valuations flag|^Loans flag|^Playbook flag|^Reconcile flag|^Schwab flag/i, '⚠️'],
+  [/^Matching/i, '🔀'],
+  [/^Sync/i, '🔄'],
+  [/^Valuations/i, '💼'],
+  [/^Loans/i, '🏦'],
+  [/^Schwab/i, '📈'],
+  [/^Reconcile/i, '🧮'],
+  [/failed/i, '🚨'],
+];
+
+function emojiFor(line) {
+  for (const [re, e] of LINE_EMOJI) if (re.test(line)) return e;
+  return '•';
+}
+
 // The daily heartbeat as a sectioned embed instead of a wall of bare text. Pure;
-// exported for tests. Lines starting with known prefixes get grouped; the color
-// reflects whether anything needs attention.
+// exported for tests. Money strings are tidied at render time (the backstop for any
+// long-precision Firefly amount that slipped into a composed line), each line gets a
+// section emoji, and the color reflects whether anything needs attention.
 export function buildHeartbeat(text) {
-  const lines = String(text).split('\n').filter((l) => l.trim() !== '');
+  const lines = tidyMoney(text).split('\n').filter((l) => l.trim() !== '');
   const first = lines.shift() ?? '';
-  const attention = lines.some((l) => /failed|STALE|flag|skipped|drift/i.test(l)) || /failed/i.test(first);
+  const attention = lines.some((l) => /failed|STALE|flag|skipped|drift|OVER|STRAGGLER/i.test(l)) || /failed/i.test(first);
   // The title comes from the message itself (Fincore daily, Fincore backup, ...);
   // hardcoding one job's name would mislabel the others' failures.
   const titleMatch = first.match(/^(Fincore [a-z]+)\b:?\s*/i);
   const embed = {
     title: titleMatch ? titleMatch[1] : 'Fincore',
-    description: [titleMatch ? first.slice(titleMatch[0].length) : first, ...lines.map((l) => `- ${l}`)]
+    description: [titleMatch ? first.slice(titleMatch[0].length) : first, ...lines.map((l) => `${emojiFor(l)} ${l}`)]
       .filter((l) => l.trim() !== '')
       .join('\n')
       .slice(0, 4000),
