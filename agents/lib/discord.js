@@ -97,6 +97,8 @@ const LINE_EMOJI = [
   [/^Budget/i, '📉'],
   [/^Influx (watch|overdue)/i, '⏳'],
   [/^STRAGGLER|^Playbook flag: STRAGGLER/i, '🚨'],
+  [/^Bills.*OVERDUE/i, '🚨'],
+  [/^Bills/i, '📅'],
   [/^STALE|^Freshness/i, '⚠️'],
   [/^Matching flag|^Sync flag|^Valuations flag|^Loans flag|^Playbook flag|^Reconcile flag|^Schwab flag/i, '⚠️'],
   [/^Matching/i, '🔀'],

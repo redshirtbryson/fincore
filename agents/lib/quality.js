@@ -25,6 +25,7 @@ import { computeAllocation, avalanche } from './allocation.js';
 import { monthlyInterest } from './debt-engine.js';
 import { taxOwed, checkpointStatus } from './tax-tracker.js';
 import { droughtStatus, bufferRunway } from './influx-watch.js';
+import { upcomingBills } from './bills.js';
 import {
   seenInfluxJournalIds,
   planInfluxCount,
@@ -737,6 +738,7 @@ const BUDGET_FOR_CATEGORY = {
   Housing: 'Housing',
 };
 const BUDGET_ASSIGN_CAP = Number(process.env.BUDGET_ASSIGN_CAP) > 0 ? Number(process.env.BUDGET_ASSIGN_CAP) : 100;
+const BILLS_LOOKAHEAD_DAYS = Number(process.env.BILLS_LOOKAHEAD_DAYS) > 0 ? Number(process.env.BILLS_LOOKAHEAD_DAYS) : 10;
 
 export async function runBudgetAssignPass(db, { fetched = null } = {}) {
   const { items } = fetched ?? (await firefly.getRecentTransactions({ types: ['withdrawal'], lookbackDays: 30 }));
@@ -922,6 +924,25 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
   );
   for (const s of stragglers) {
     flags.push(`STRAGGLER on Discover: ${s.date} ${usd(parseAmount(s.amount))} ${s.description.slice(0, 40)} — migrate this biller to the Amazon card`);
+  }
+
+  // 5b. BILLS: Firefly-native bill definitions (property tax, one-offs with a due
+  // date) surfaced when due within the lookahead or overdue-unpaid. Firefly marks
+  // them paid by transaction linkage, so a paid bill disappears from here on its own.
+  try {
+    const monthStartB = todayStr.slice(0, 8) + '01';
+    const monthEnd = new Date(new Date(`${todayStr}T12:00:00Z`).getTime() + 45 * 86400000);
+    const rawBills = await firefly.getBills(monthStartB, firefly.nyDateStr(monthEnd));
+    const { due, flags: billFlags } = upcomingBills(rawBills, { today: todayStr, lookaheadDays: BILLS_LOOKAHEAD_DAYS });
+    flags.push(...billFlags);
+    for (const b of due) {
+      const when = b.overdue ? `OVERDUE ${-b.daysUntil}d` : b.daysUntil === 0 ? 'due TODAY' : `due in ${b.daysUntil}d (${b.dueDate})`;
+      const line = `Bills: ${b.name} ${b.amount !== null ? usd(b.amount) + ' ' : ''}${when}`;
+      lines.push(line);
+      if (b.overdue || b.daysUntil <= 2) queueNotification(db, 'confirm', line);
+    }
+  } catch (e) {
+    flags.push(`bills pass unavailable: ${e.message}`);
   }
 
   // 6. BUDGET STATUS (current month).

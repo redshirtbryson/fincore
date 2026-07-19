@@ -512,6 +512,27 @@ export async function deleteTransaction(id) {
   return api(`/transactions/${id}`, { method: 'DELETE' });
 }
 
+// Firefly's native Bills for a period: name, amount range, next expected due date,
+// and whether the bill was paid within [start, end] (Firefly links transactions to
+// bills via its rules and reports paid_dates). The heartbeat's bills pass consumes
+// this; bill definitions themselves are created/edited in the Firefly UI.
+export async function getBills(startStr, endStr) {
+  const j = await api(`/bills?start=${startStr}&end=${endStr}&limit=100`);
+  const out = [];
+  for (const b of j?.data || []) {
+    const at = b.attributes || {};
+    out.push({
+      name: at.name || '',
+      amountMin: at.amount_min !== undefined && at.amount_min !== null && at.amount_min !== '' ? Number(at.amount_min) : null,
+      amountMax: at.amount_max !== undefined && at.amount_max !== null && at.amount_max !== '' ? Number(at.amount_max) : null,
+      nextDue: at.next_expected_match ? String(at.next_expected_match).slice(0, 10) : null,
+      paidInPeriod: Array.isArray(at.paid_dates) && at.paid_dates.length > 0,
+      active: at.active !== false,
+    });
+  }
+  return out;
+}
+
 // Budget spent-vs-limit for a period (the daily heartbeat's budget lines). Firefly
 // returns spent as an array of per-currency sums when start/end are supplied.
 export async function getBudgetStatus(startStr, endStr) {
