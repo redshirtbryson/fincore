@@ -42,33 +42,43 @@ for (const type of ['withdrawal', 'deposit']) {
   }
 }
 
-const key = (x) => `${x.type}|${x.acctId}|${x.date}|${cents(x.amount)}`;
-const csvByKey = new Map();
-for (const x of all) if (x.tags.includes('csv-backfill')) csvByKey.set(key(x), x);
+// v2 (2026-07-19): the first pass filtered originals by the csv-backfill tag and
+// exact-date match, which missed (a) the checking import, which predates that tag
+// convention (untagged rows), and (b) copies the bank dated one day apart from the
+// feed. Originals are now ANY row without the simplefin-sync tag; dates may differ
+// by one day; and a NORMALIZED-DESCRIPTION match is required as the safety lock
+// (two genuinely separate same-amount purchases carry different reference codes,
+// e.g. distinct Coinbase order ids, so they can never pair).
+const normDesc = (d) => (d || '').toUpperCase().replace(/[^A-Z0-9*]/g, '');
+const dayNum = (s) => Math.floor(Date.parse(s) / 86400000);
 
-const syncMatches = new Map(); // key -> sync copies
-for (const x of all) {
-  if (!x.tags.includes('simplefin-sync')) continue;
-  const k = key(x);
-  if (!csvByKey.has(k)) continue;
-  if (!syncMatches.has(k)) syncMatches.set(k, []);
-  syncMatches.get(k).push(x);
-}
+const originals = all.filter((x) => !x.tags.includes('simplefin-sync'));
+const syncRows = all.filter((x) => x.tags.includes('simplefin-sync'));
 
 const toDelete = [];
 let ambiguous = 0;
-for (const [k, copies] of syncMatches) {
-  const c = csvByKey.get(k);
-  if (copies.length > 1) {
+const claimedOriginals = new Set();
+for (const x of syncRows) {
+  const matches = originals.filter(
+    (o) =>
+      !claimedOriginals.has(o.txId) &&
+      o.type === x.type &&
+      String(o.acctId) === String(x.acctId) &&
+      cents(o.amount) === cents(x.amount) &&
+      Math.abs(dayNum(o.date) - dayNum(x.date)) <= 1 &&
+      normDesc(o.desc) === normDesc(x.desc)
+  );
+  if (matches.length === 0) continue;
+  if (matches.length > 1) {
     ambiguous += 1;
-    console.log(`AMBIGUOUS (${copies.length} sync copies for one CSV row; a real repeat purchase?) — NOT touched:`);
-    for (const x of copies) console.log(`    tx${x.txId} ${x.date} $${parseFloat(x.amount).toFixed(2)} ${x.desc.slice(0, 40)}`);
+    console.log(`AMBIGUOUS (${matches.length} original candidates for sync tx${x.txId} ${x.desc.slice(0, 36)}) — NOT touched`);
     continue;
   }
-  const x = copies[0];
+  const c = matches[0];
+  claimedOriginals.add(c.txId);
   console.log(`DUP: ${x.date} $${parseFloat(x.amount).toFixed(2)} ${x.acct}`);
-  console.log(`    keep   csv tx${c.txId}: ${c.desc.slice(0, 46)}`);
-  console.log(`    delete sync tx${x.txId}: ${x.desc.slice(0, 46)}`);
+  console.log(`    keep   original tx${c.txId} (${c.date}): ${c.desc.slice(0, 46)}`);
+  console.log(`    delete sync     tx${x.txId} (${x.date}): ${x.desc.slice(0, 46)}`);
   toDelete.push(x);
 }
 

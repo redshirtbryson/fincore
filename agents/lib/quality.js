@@ -52,8 +52,13 @@ function autonomyThreshold(db) {
 // 'transfer-pair', m } for a matched pair the bot can convert on Confirm; absent
 // payload means acknowledge-only.
 function queueNotification(db, severity, message, { payload = null } = {}) {
+  // Dedupe against unresolved copies AND previously-DISMISSED copies: a dismissal
+  // means "this suggestion is wrong, permanently" (e.g. a coincidental pair that is
+  // not a transfer) — re-queueing it daily would train the human to ignore the
+  // channel. Acknowledged/confirmed items may legitimately re-queue if the
+  // condition recurs.
   const exists = db
-    .prepare('SELECT 1 FROM notification_queue WHERE message = ? AND resolution IS NULL')
+    .prepare(`SELECT 1 FROM notification_queue WHERE message = ? AND (resolution IS NULL OR resolution = 'dismissed')`)
     .get(message);
   if (!exists) {
     db.prepare('INSERT INTO notification_queue (severity, message, payload_json) VALUES (?, ?, ?)').run(
