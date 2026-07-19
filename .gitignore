@@ -32,3 +32,6 @@ __pycache__/
 
 # Tax returns: contain SSNs and account numbers — NEVER commit (query locally only)
 tax-returns/
+
+# Personal documents (statements, policies, registrations) — local only, never commit
+documents/

@@ -50,6 +50,22 @@ accounts. fincore never does business accounting for any of them.
 - Filed returns: PDFs in `tax-returns/` (local only); figures summarized in the
   vault ([2025 summary](../../obsidian-vault/projects/fincore/reference/2025-tax-return-summary.md))
 
+## Real property
+
+**Primary residence** — 129 Jefferson Park Dr, Huntington, WV 25705-2612
+- Legal: LT 27 BATES/PEA RDG #2 · Map/Parcel **8N 0009 0000 0000**
+- District: 01-Barboursville, Cabell County · Class 2 · County account 00005502
+- Property tax: billed yearly by the Cabell County Sheriff; halves due ~Sep 1 and
+  ~Mar 1 with a ~2.5% discount for early payment (full-year-by-Sep-1 is cheapest)
+- 2026 assessment: $67,440 (WV assesses at 60% of appraised → county appraisal
+  ~$112,400); 2026 full-year tax $891.12 discounted / $913.96 face
+- Statements archived in `documents/property/` (local only, gitignored)
+- OPEN QUESTION (2026-07-19): whether the Chase mortgage escrow pays this tax
+  directly, or Bryson pays the Sheriff himself — determines who acts on the bill
+
+(The new-home land parcel is not yet recorded here — add when its first
+assessment/deed document is in hand.)
+
 ## Health insurance (as of 2026-07)
 
 - Coverage through Blenko's group plan: employer pays **80% of Bryson's own
