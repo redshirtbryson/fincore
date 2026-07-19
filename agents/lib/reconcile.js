@@ -98,6 +98,13 @@ export function reconcilePaystubDeposits({
 
   const band = Math.max(Math.abs(netPay) * (tolerancePercent / 100), toleranceDollarsMin);
 
+  // Net pay may be SPLIT across accounts (Bryson's Blenko stub, confirmed
+  // 2026-07-19: $930.08 to checking + $150.00 to CNB = $1,080.08 net). A
+  // per-deposit compare would flag both legs of a correct split forever, so
+  // deposits are grouped by pay date and each DAY'S TOTAL is compared to the
+  // template net. A lone unsplit deposit is a group of one, preserving the
+  // original behavior.
+  const byDate = new Map();
   for (const deposit of deposits) {
     const amount = parseAmount(deposit ? deposit.amount : undefined);
     if (amount === null) {
@@ -107,14 +114,20 @@ export function reconcilePaystubDeposits({
       );
       continue;
     }
+    const key = deposit && deposit.date ? deposit.date : 'unknown';
+    if (!byDate.has(key)) byDate.set(key, { deposits: [], total: 0 });
+    const g = byDate.get(key);
+    g.deposits.push(deposit);
+    g.total = Math.round((g.total + amount) * 100) / 100;
+  }
 
-    const deltaDollars = amount - netPay;
+  for (const [, g] of byDate) {
+    const deltaDollars = Math.round((g.total - netPay) * 100) / 100;
     const deltaPercent = netPay === 0 ? null : (deltaDollars / netPay) * 100;
-
     if (Math.abs(deltaDollars) <= band) {
-      matched.push(deposit);
+      matched.push(...g.deposits);
     } else {
-      drifted.push({ deposit, deltaDollars, deltaPercent });
+      for (const deposit of g.deposits) drifted.push({ deposit, deltaDollars, deltaPercent });
     }
   }
 

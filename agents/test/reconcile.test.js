@@ -144,3 +144,29 @@ test('a zero net pay template yields null deltaPercent without dividing by zero'
   assert.equal(r.drifted.length, 1);
   assert.equal(r.drifted[0].deltaPercent, null);
 });
+
+test('split net pay: same-day deposits are summed before comparing (Blenko $930.08 + $150.00)', () => {
+  const template = { source: 'Blenko', net_pay: 1080.08 };
+  const good = reconcilePaystubDeposits({
+    template,
+    deposits: [
+      { date: '2026-07-16', amount: '930.08' },
+      { date: '2026-07-16', amount: '150.00' },
+    ],
+  });
+  assert.equal(good.matched.length, 2);
+  assert.equal(good.drifted.length, 0);
+  assert.equal(good.flags.length, 0);
+
+  // A short split must still drift — both legs reported with the day-total delta.
+  const short = reconcilePaystubDeposits({
+    template,
+    deposits: [
+      { date: '2026-07-23', amount: '930.08' },
+      { date: '2026-07-23', amount: '100.00' },
+    ],
+  });
+  assert.equal(short.matched.length, 0);
+  assert.equal(short.drifted.length, 2);
+  assert.equal(short.drifted[0].deltaDollars, -50);
+});
