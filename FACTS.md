@@ -15,10 +15,11 @@ The single source of truth for household, entity, and tax-profile facts. Rules:
 
 | Person | Role | Born |
 |---|---|---|
-| Bryson R. Cutler | taxpayer | (on file with CPA) |
-| Mikalia Cutler | spouse | (on file with CPA) |
+| Bryson R. Cutler | taxpayer | 1993-11-05 |
+| Mikalia Cutler | spouse | 1995-01-17 |
 | Maya Cutler | daughter, dependent | **2026-06-27** |
 
+- Married: **2022-10-08**
 - Filing status: **married filing jointly**
 - Dependents: **Maya, from tax year 2026** (2025 return had none — she arrives on
   the 2026 return with the child tax credit)
@@ -68,4 +69,5 @@ accounts. fincore never does business accounting for any of them.
 ## Change log
 
 - **2026-07-19:** file created. Household facts recorded, including Maya
-  (b. 2026-06-27, first dependent, from tax year 2026).
+  (b. 2026-06-27, first dependent, from tax year 2026). Same day: adult birth
+  dates and marriage date (2022-10-08) added.
