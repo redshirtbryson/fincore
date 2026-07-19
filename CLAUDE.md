@@ -2,6 +2,8 @@
 
 Read `SPEC.md` before building anything. It is the source of truth for architecture, the definition of success, the capability posture, and the phase plan. This file is the short orientation.
 
+**`FACTS.md` at the repo root is the single source of truth for household, entity, and tax-profile facts** (filing status, dependents, income sources, insurance structure, CPA). Read it before any tax, household, or income reasoning. Never restate those facts from memory or other documents — if anything conflicts with FACTS.md, FACTS.md wins and the other source is stale. Update it only on real life events, via commit.
+
 ## What fincore is
 
 An instructable personal financial assistant for one user, Bryson, whose job is to make him measurably better off. Not a dashboard. It reads the full picture, answers questions, makes changes on instruction (with confirmation), notices problems and opportunities unprompted, plans across competing objectives, and is judged by whether net worth goes up and DTI goes down over a period of use.
