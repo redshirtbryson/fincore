@@ -29,3 +29,6 @@ weekly-trend.csv
 schwab/.venv/
 __pycache__/
 *.pyc
+
+# Tax returns: contain SSNs and account numbers — NEVER commit (query locally only)
+tax-returns/
