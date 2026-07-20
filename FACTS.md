@@ -124,9 +124,13 @@ assessment/deed document is in hand.)
 
 ## Insurance (non-health) & estate
 
-- **Ameritas = dental, two policies.** Expected ~$35/mo each (~$70 total); the
-  ledger shows **$71.78 + $73.44 = $145.22/mo** — exactly double the expectation.
-  VERIFY (2026-07-20): family-tier pricing, or double billing? Potential ~$70/mo.
+- **Ameritas = dental, two policies, ONE monthly draft of $73.44** (~$36.72 per
+  policy, matching the ~$35 expectation; rate rose from $69.29 in Mar 2026). NO
+  double-billing — an earlier fincore flag claiming "$145.22/mo, exactly double"
+  was an analysis error (a mid-year descriptor change split one stream into two
+  merchant groups, and a group average got stacked on a rate as if concurrent).
+  Corrected 2026-07-20 from the full charge list: exactly one charge per month,
+  Jan–Jul 2026.
 - **Beneficiaries: Mikalia on everything** (per Bryson 2026-07-20; as spouse she
   is also the default where no designation exists). Worth adding contingent
   beneficiaries now that Maya exists.
