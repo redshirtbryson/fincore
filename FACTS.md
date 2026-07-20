@@ -84,6 +84,19 @@ Redshirt was founded the same year.
 (The new-home land parcel is not yet recorded here — add when its first
 assessment/deed document is in hand.)
 
+## Vehicles
+
+**2020 Subaru Outback** — VIN 4S4BTGHDXL3133959, titled to Bryson
+- Chase auto loan: $37,869.48 originally financed, 75-month term at 5.24%,
+  **matures 2028-09-08**, due the 8th monthly (paid ~the 3rd, $593.20 ACH from
+  checking). Balance tracked live by fincore (balance-mode sync).
+- Playbook treatment: minimums only (cheap debt); the payment becomes ~$593/mo of
+  freed cash flow at maturity, Sep 2028.
+- Vehicle value is NOT carried as an asset in net worth (conservative; a manual
+  asset could be added under SPEC Phase 15 completeness if desired).
+- WV personal property tax on the vehicle: ticket not yet located (open item
+  2026-07-20 — not escrowed, likely paid to the Cabell Sheriff separately).
+
 ## Health insurance (as of 2026-07)
 
 - Coverage through Blenko's group plan: employer pays **80% of Bryson's own
