@@ -60,8 +60,16 @@ accounts. fincore never does business accounting for any of them.
 - 2026 assessment: $67,440 (WV assesses at 60% of appraised → county appraisal
   ~$112,400); 2026 full-year tax $891.12 discounted / $913.96 face
 - Statements archived in `documents/property/` (local only, gitignored)
-- OPEN QUESTION (2026-07-19): whether the Chase mortgage escrow pays this tax
-  directly, or Bryson pays the Sheriff himself — determines who acts on the bill
+- **Property tax is paid by the Chase mortgage ESCROW** (confirmed 2026-07-19 from
+  the Chase escrow analysis) — the Sheriff's statement is informational; never pay
+  it manually. Escrow also pays homeowner's insurance ($967.30/yr, coverage
+  2025-11..2026-10) and PMI ($409.68/yr = $34.14/mo).
+- Chase mortgage composition (per Sep 2025 analysis): P&I $637.22 + escrow $176.57
+  = **PITI $813.79/mo**. The actual ACH is $947.29/mo — OPEN QUESTION (2026-07-19):
+  the ~$133.50/mo difference appears to be extra principal; confirm intent.
+- PMI-removal opportunity: PMI costs $409.68/yr; with the remodel and equity
+  position, a Chase PMI-deletion request (may require an appraisal) could end it
+  permanently — flagged 2026-07-19, not yet pursued.
 
 (The new-home land parcel is not yet recorded here — add when its first
 assessment/deed document is in hand.)
