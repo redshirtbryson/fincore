@@ -124,13 +124,20 @@ assessment/deed document is in hand.)
 
 ## Insurance (non-health) & estate
 
-- **Ameritas = dental, two policies, ONE monthly draft of $73.44** (~$36.72 per
-  policy, matching the ~$35 expectation; rate rose from $69.29 in Mar 2026). NO
-  double-billing — an earlier fincore flag claiming "$145.22/mo, exactly double"
-  was an analysis error (a mid-year descriptor change split one stream into two
-  merchant groups, and a group average got stacked on a rate as if concurrent).
-  Corrected 2026-07-20 from the full charge list: exactly one charge per month,
-  Jan–Jul 2026.
+- **Ameritas dental = ONE policy, #240058621-D** (Ameritas Life Insurance Corp.,
+  individual dental + ortho, WV, effective 2020-03-01, renews Mar 1). Bryson is
+  policyholder; Mikalia is covered as the one dependent. The $73.44/mo draft is
+  the exact "Policyholder plus One Dependent Only" rate from the policy's premium
+  table ($35.84 single / $73.44 +1 dep / $122.07 +2 or more deps) — NOT two
+  policies, NOT double-billing (dual coverage under a second Ameritas policy is
+  actually prohibited by its terms). The Jan–Feb $69.29 → Mar $73.44 step was the
+  Mar 1 renewal repricing. Corrected 2026-07-20 from the policy document,
+  archived at `documents/insurance/` (local only).
+- **Maya + Ameritas dental (open decision):** a newborn is covered automatically
+  only for her first 31 days; keeping her on requires notice + premium (tier
+  jumps to $122.07/mo, +$48.63). No urgency: the policy waives late-entrant
+  status for a newborn until 30 days after her 2nd birthday (~2028-07-27), and
+  infant dental value is near zero — revisit around age 1.
 - **Beneficiaries: Mikalia on everything** (per Bryson 2026-07-20; as spouse she
   is also the default where no designation exists). Worth adding contingent
   beneficiaries now that Maya exists.
