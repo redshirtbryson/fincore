@@ -116,9 +116,9 @@ assessment/deed document is in hand.)
   ~**$235/yr of match unclaimed**. ACTION (2026-07-20): switch the deferral to a
   PERCENTAGE (>=3%) so it tracks raises automatically.
 - **Vesting: 3-year cliff on employer money** (0% until 3 years of service, then
-  100%). Employee deferrals always 100% vested. OPEN FACT: Bryson's Blenko hire
-  date — determines whether the ~$831+ of match in the balance is vested (if under
-  3 years, net worth slightly overstates).
+  100%). Employee deferrals always 100% vested. Bryson confirmed 3+ years of
+  Blenko service (2026-07-20) — **fully vested**; the Empower balance is
+  net-worth-accurate.
 - Roth 401k option exists in the plan (deferrals may be designated Roth).
 - 2026 employee limit: $24,500 (under 50).
 

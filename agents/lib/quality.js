@@ -54,13 +54,13 @@ function autonomyThreshold(db) {
 // 'transfer-pair', m } for a matched pair the bot can convert on Confirm; absent
 // payload means acknowledge-only.
 function queueNotification(db, severity, message, { payload = null } = {}) {
-  // Dedupe against unresolved copies AND previously-DISMISSED copies: a dismissal
-  // means "this suggestion is wrong, permanently" (e.g. a coincidental pair that is
-  // not a transfer) — re-queueing it daily would train the human to ignore the
-  // channel. Acknowledged/confirmed items may legitimately re-queue if the
-  // condition recurs.
+  // A given EXACT message queues at most once, ever (2026-07-20: acknowledged
+  // ambiguous-match items were re-nagging daily because the still-true condition
+  // regenerates identical text). Recurring conditions that genuinely re-trigger
+  // carry different details (dates, amounts, tx ids) and therefore different text,
+  // so they still alert; identical text means the human already saw exactly this.
   const exists = db
-    .prepare(`SELECT 1 FROM notification_queue WHERE message = ? AND (resolution IS NULL OR resolution = 'dismissed')`)
+    .prepare('SELECT 1 FROM notification_queue WHERE message = ?')
     .get(message);
   if (!exists) {
     db.prepare('INSERT INTO notification_queue (severity, message, payload_json) VALUES (?, ?, ?)').run(
