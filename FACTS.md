@@ -65,8 +65,9 @@ accounts. fincore never does business accounting for any of them.
   it manually. Escrow also pays homeowner's insurance ($967.30/yr, coverage
   2025-11..2026-10) and PMI ($409.68/yr = $34.14/mo).
 - Chase mortgage composition (per Sep 2025 analysis): P&I $637.22 + escrow $176.57
-  = **PITI $813.79/mo**. The actual ACH is $947.29/mo — OPEN QUESTION (2026-07-19):
-  the ~$133.50/mo difference appears to be extra principal; confirm intent.
+  = **PITI $813.79/mo**. The actual ACH is $947.29/mo — the ~$133.50/mo difference
+  is **intentional extra principal** (confirmed 2026-07-19): Bryson's deliberate
+  choice to pay the mortgage down faster.
 - PMI-removal opportunity: PMI costs $409.68/yr; with the remodel and equity
   position, a Chase PMI-deletion request (may require an appraisal) could end it
   permanently — flagged 2026-07-19, not yet pursued.
