@@ -70,6 +70,9 @@ accounts. fincore never does business accounting for any of them.
 - PMI-removal opportunity: PMI costs $409.68/yr; with the remodel and equity
   position, a Chase PMI-deletion request (may require an appraisal) could end it
   permanently — flagged 2026-07-19, not yet pursued.
+- Homeowner's insurance: **State Farm policy 48BUW1147**, dwelling coverage
+  $172,300, renews May 31 (premium paid from escrow). Detail dossier:
+  [home escrow & insurance](../../obsidian-vault/projects/fincore/reference/2026-07-19-home-escrow-insurance.md)
 
 (The new-home land parcel is not yet recorded here — add when its first
 assessment/deed document is in hand.)
