@@ -39,16 +39,22 @@ The single source of truth for household, entity, and tax-profile facts. Rules:
 Blenko, Redshirt, and Barboursville Massage are INCOME SOURCES feeding personal
 accounts. fincore never does business accounting for any of them.
 
+**Former:** Infinity Marketing Solutions, LLC (S-corp) — Bryson held equity
+2017-04-01 to 2024-03-22, sold for $62,500 (all long-term gain, 2024 return);
+Redshirt was founded the same year.
+
 ## Tax profile
 
-- CPA: **Crowe & Crowe CPAs PLLC** (Alexandria Crowe), Charleston, WV
+- CPA: **Crowe & Crowe CPAs PLLC** (Alexandria Crowe), Charleston, WV — since tax
+  year 2024; previously Walls & Associates (Joshua O'Dell), Milton, WV
 - Convention: **each spouse self-funds ~30% of their own self-employment income**;
   set-asides converge at CNB Joint at payment time; annual balance due paid each
   April (no quarterly estimateds — a deliberate tradeoff with a known cost, see the
   penalty line on the 2025 return)
 - Bryson's set-aside vault: Huntington Savings (tax only, never an emergency source)
-- Filed returns: PDFs in `tax-returns/` (local only); figures summarized in the
-  vault ([2025 summary](../../obsidian-vault/projects/fincore/reference/2025-tax-return-summary.md))
+- Filed returns 2023-2025: PDFs in `tax-returns/` (local only); summarized in the
+  vault ([2025 summary](../../obsidian-vault/projects/fincore/reference/2025-tax-return-summary.md),
+  [2023-2025 history](../../obsidian-vault/projects/fincore/reference/tax-history-2023-2025.md))
 
 ## Real property
 
