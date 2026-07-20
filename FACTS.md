@@ -32,7 +32,7 @@ The single source of truth for household, entity, and tax-profile facts. Rules:
 
 | Entity | Who | Structure | Notes |
 |---|---|---|---|
-| Blenko Glass Co., Inc. | Bryson | W-2 employee (officer salary, weekly) | 401k deduction sized to max company match — do not "optimize" |
+| Blenko Glass Co., Inc. | Bryson | W-2 employee (officer salary, weekly) | 401k: see Retirement below |
 | WV CSP, LLC dba Redshirt Cloud | Bryson | single-member LLC, Schedule C (marketing/MSP) | lumpy owner draws ~5–6 wk cadence; Neptune Political is a CLIENT of Redshirt, not a household entity |
 | Barboursville Massage | Mikalia | sole proprietorship, Schedule C | real employer business (~$95k/yr wages paid); operationally out of fincore scope |
 
@@ -94,8 +94,39 @@ assessment/deed document is in hand.)
   freed cash flow at maturity, Sep 2028.
 - Vehicle value is NOT carried as an asset in net worth (conservative; a manual
   asset could be added under SPEC Phase 15 completeness if desired).
-- WV personal property tax on the vehicle: ticket not yet located (open item
-  2026-07-20 — not escrowed, likely paid to the Cabell Sheriff separately).
+- WV personal property tax on the vehicle: ticket still not located (the document
+  pulled 2026-07-20 was the REAL property ticket #1788 — the Subaru is under a
+  separate PERSONAL property ticket on the sheriff's site).
+
+**1991 Mazda Miata** — owned outright, no loan. Estimated value $4-6k (Bryson,
+2026-07-20). Not carried in net worth (same conservative treatment as the Outback).
+
+## Retirement (Blenko 401k via Empower)
+
+- Plan: Blenko Glass Company, Inc. 401(k) (Empower/FASCORE; highlights doc in
+  `documents/benefits/`)
+- **Match formula: 100% of deferrals up to 3% of compensation.**
+- Current deferral: **$50/wk FLAT** — set when 3% of salary equaled $50; at the
+  current ~$1,818.35/wk gross, 3% = ~$54.55/wk, so the flat amount now leaves
+  ~**$235/yr of match unclaimed**. ACTION (2026-07-20): switch the deferral to a
+  PERCENTAGE (>=3%) so it tracks raises automatically.
+- **Vesting: 3-year cliff on employer money** (0% until 3 years of service, then
+  100%). Employee deferrals always 100% vested. OPEN FACT: Bryson's Blenko hire
+  date — determines whether the ~$831+ of match in the balance is vested (if under
+  3 years, net worth slightly overstates).
+- Roth 401k option exists in the plan (deferrals may be designated Roth).
+- 2026 employee limit: $24,500 (under 50).
+
+## Insurance (non-health) & estate
+
+- **Ameritas = dental, two policies.** Expected ~$35/mo each (~$70 total); the
+  ledger shows **$71.78 + $73.44 = $145.22/mo** — exactly double the expectation.
+  VERIFY (2026-07-20): family-tier pricing, or double billing? Potential ~$70/mo.
+- **Beneficiaries: Mikalia on everything** (per Bryson 2026-07-20; as spouse she
+  is also the default where no designation exists). Worth adding contingent
+  beneficiaries now that Maya exists.
+- **Estate planning: NONE yet — conversation needed** (flagged 2026-07-20). With
+  Maya born, the priority items are wills and a guardianship designation.
 
 ## Health insurance (as of 2026-07)
 
