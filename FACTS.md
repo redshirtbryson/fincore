@@ -94,9 +94,14 @@ assessment/deed document is in hand.)
   freed cash flow at maturity, Sep 2028.
 - Vehicle value is NOT carried as an asset in net worth (conservative; a manual
   asset could be added under SPEC Phase 15 completeness if desired).
-- WV personal property tax on the vehicle: ticket still not located (the document
-  pulled 2026-07-20 was the REAL property ticket #1788 — the Subaru is under a
-  separate PERSONAL property ticket on the sheriff's site).
+- **WV personal property tax: COMPLIANCE GAP (found 2026-07-20).** Cabell portal
+  shows PP tickets under Bryson only through tax year 2023 ($263.94/half); nothing
+  for 2024-2026 despite owning the Outback + Miata. NEXT STEPS: (1) search the
+  portal under Mikalia's name; (2) if truly unfiled, call the Cabell County
+  ASSESSOR to file/catch up (annual filing due Oct 1). Notes: WV requires a paid
+  PP receipt for registration renewal, and the WV motor-vehicle tax credit
+  (2024+) makes timely-paid vehicle tax ~cost-neutral on the state return —
+  filing properly costs almost nothing net.
 
 **1991 Mazda Miata** — owned outright, no loan. Estimated value $4-6k (Bryson,
 2026-07-20). Not carried in net worth (same conservative treatment as the Outback).
