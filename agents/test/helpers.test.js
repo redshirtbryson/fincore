@@ -135,6 +135,30 @@ test('buildHeartbeat sections the summary and colors by attention', () => {
   assert.ok(backup.embeds[0].description.includes('FAILED'));
 });
 
+test('buildHeartbeat spaces section groups and drops the duplicate Schwab nag', () => {
+  const msg = [
+    'Fincore daily: no new transactions to categorize.',
+    'Sync: 2 imported.',
+    'Matching: 3 ambiguous queued.',
+    'Loans: 2 loan balance(s) already exact.',
+    'Tax set-aside: short $13,699.24.',
+    'Debts (avalanche): Discover $27,057.',
+    'Schwab flag: Schwab analytics token expired.',
+    'Schwab flag: Schwab token missing or expired; run: npm run schwab-auth',
+    'Snapshot: net worth $95,041.15, DTI 15.4%.',
+  ].join('\n');
+  const d = buildHeartbeat(msg).embeds[0].description;
+  // Blank lines separate header, data plumbing, plan, flags, and snapshot.
+  const groups = d.split('\n\n');
+  assert.equal(groups.length, 5);
+  assert.ok(groups[1].includes('Sync: 2 imported.') && groups[1].includes('Loans:'));
+  assert.ok(groups[2].includes('Tax set-aside') && groups[2].includes('Debts'));
+  assert.ok(groups[3].includes('Schwab analytics token expired'));
+  assert.ok(groups[4].startsWith('📊 Snapshot:'));
+  // Exactly one Schwab flag line survives.
+  assert.equal((d.match(/Schwab flag:/g) || []).length, 1);
+});
+
 test('buildAsk labels deposits as deposits', () => {
   const item = { tx_id: '11', journal_id: '22', type: 'deposit', merchant: 'BLENKO GLASS', amount: '1500.00', currency: 'USD', date: '2026-07-10', account: 'Checking' };
   const ask = buildAsk(item, { category: 'Income', confidence: 0.6, alternatives: [] });

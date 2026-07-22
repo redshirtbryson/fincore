@@ -115,21 +115,55 @@ function emojiFor(line) {
   return '•';
 }
 
+// Heartbeat lines group into visual paragraphs: data plumbing (sync, matching,
+// valuations, loans), then the money plan (tax, influx, debts, budgets, bills),
+// then account flags (Schwab), then the snapshot. A line that matches no rule
+// inherits the section of the line above it, so unknown lines never force a break.
+const SECTION_RULES = [
+  [/^Snapshot/i, 'snapshot'],
+  [/^(Tax|INFLUX|Influx|WINDFALL|Debts|Revolving|STRAGGLER|Straggler|Bills|Budget)/i, 'plan'],
+  [/^(Schwab|Backup)/i, 'flags'],
+];
+
+function sectionOf(line, prev) {
+  for (const [re, key] of SECTION_RULES) if (re.test(line)) return key;
+  return prev ?? 'data';
+}
+
 // The daily heartbeat as a sectioned embed instead of a wall of bare text. Pure;
 // exported for tests. Money strings are tidied at render time (the backstop for any
 // long-precision Firefly amount that slipped into a composed line), each line gets a
-// section emoji, and the color reflects whether anything needs attention.
+// section emoji, blank lines separate the section groups, and the color reflects
+// whether anything needs attention.
 export function buildHeartbeat(text) {
-  const lines = tidyMoney(text).split('\n').filter((l) => l.trim() !== '');
-  const first = lines.shift() ?? '';
+  const raw = tidyMoney(text).split('\n').filter((l) => l.trim() !== '');
+  const first = raw.shift() ?? '';
+  // Two code paths (analytics + credential check) can both flag Schwab auth on the
+  // same run; one nag is enough.
+  let schwabFlagSeen = false;
+  const lines = raw.filter((l) => {
+    if (!/^Schwab flag:/i.test(l)) return true;
+    if (schwabFlagSeen) return false;
+    schwabFlagSeen = true;
+    return true;
+  });
   const attention = lines.some((l) => /failed|STALE|flag|skipped|drift|OVER|STRAGGLER/i.test(l)) || /failed/i.test(first);
+  const body = [];
+  let prev = null;
+  for (const l of lines) {
+    const sec = sectionOf(l, prev);
+    if (prev !== null && sec !== prev) body.push('');
+    body.push(`${emojiFor(l)} ${l}`);
+    prev = sec;
+  }
   // The title comes from the message itself (Fincore daily, Fincore backup, ...);
   // hardcoding one job's name would mislabel the others' failures.
   const titleMatch = first.match(/^(Fincore [a-z]+)\b:?\s*/i);
+  const head = titleMatch ? first.slice(titleMatch[0].length) : first;
   const embed = {
     title: titleMatch ? titleMatch[1] : 'Fincore',
-    description: [titleMatch ? first.slice(titleMatch[0].length) : first, ...lines.map((l) => `${emojiFor(l)} ${l}`)]
-      .filter((l) => l.trim() !== '')
+    description: [head, ...(head.trim() !== '' && body.length ? [''] : []), ...body]
+      .filter((l, i, a) => l.trim() !== '' || (i > 0 && a[i - 1].trim() !== ''))
       .join('\n')
       .slice(0, 4000),
     color: attention ? 0xe0a500 : 0x2e8b57,

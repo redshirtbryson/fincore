@@ -32,3 +32,24 @@ export function usd0(v) {
 export function tidyMoney(text) {
   return String(text).replace(/\$(\d[\d,]*)\.(\d{2})\d+/g, '$$$1.$2');
 }
+
+// The Coinbase wallets are one upstream feed that fans out into ~13 per-wallet
+// valuation rows; when the feed stalls they all go stale together and the snapshot
+// line becomes a wall of UUIDs. Collapse them into a single aggregate entry carrying
+// the oldest as-of date; every other stale entry passes through untouched.
+export function compactStale(list) {
+  const coinbase = [];
+  const rest = [];
+  for (const s of list || []) {
+    if (/^valuation:Coinbase /i.test(String(s))) coinbase.push(String(s));
+    else rest.push(s);
+  }
+  if (!coinbase.length) return rest;
+  const dates = coinbase
+    .map((s) => (s.match(/\(as of ([^)]+)\)/) || [])[1])
+    .filter(Boolean)
+    .sort();
+  const asOf = dates.length ? ` (as of ${dates[0]})` : '';
+  rest.push(`valuation:Coinbase x${coinbase.length} wallets${asOf}`);
+  return rest;
+}

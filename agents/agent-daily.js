@@ -6,6 +6,7 @@ import 'dotenv/config';
 import * as firefly from './lib/firefly.js';
 import { categorizeBatch } from './lib/anthropic.js';
 import { sendAsk, sendHeartbeat } from './lib/discord.js';
+import { compactStale } from './lib/format.js';
 
 // The store (better-sqlite3, a native addon) is loaded lazily so a missing or
 // broken native build degrades the snapshot and audit features, never the
@@ -226,7 +227,7 @@ async function dailyStoreLines() {
         const dti = outcome.dti.dti;
         let line = `Snapshot: net worth ${money(computedNetWorth)}, DTI ${dti === null ? 'n/a' : `${(dti * 100).toFixed(1)}%`}${outcome.dti.partial ? ' (partial basis)' : ''}.`;
         if (outcome.flags.length) line += ` ${outcome.flags.length} data flags; run npm run snapshot for detail.`;
-        if (outcome.stale.length) line += ` STALE: ${outcome.stale.join(', ')}.`;
+        if (outcome.stale.length) line += ` STALE: ${compactStale(outcome.stale).join(', ')}.`;
         lines.push(line);
       } catch (e) {
         lines.push(`Snapshot failed: ${e.message}`);
