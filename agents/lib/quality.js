@@ -140,6 +140,24 @@ export function multiSplitTxIds(items) {
   return multi;
 }
 
+// A deposit qualifies as a windfall candidate only when it is real money arriving in
+// an asset account. A payment credit on a card imports as a deposit whose destination
+// is the liability itself (2026-07-25: the $6,500 Discover payment false-flagged this
+// way when its checking-side withdrawal lagged in the feed), so liability-destination
+// deposits are excluded outright — a payment to your own debt is never a windfall.
+export function isWindfallCandidate(t, { liabilityIds = new Set(), minAmount, startDate, seenJournalIds = new Set() }) {
+  return (
+    t.type === 'deposit' &&
+    !liabilityIds.has(t.accountId) &&
+    !t.tags.some((x) => x.startsWith('income-source:')) &&
+    !['Transfer', 'Refunds'].includes(t.category) &&
+    parseAmount(t.amount) !== null &&
+    parseAmount(t.amount) >= minAmount &&
+    t.date >= startDate &&
+    !seenJournalIds.has(t.journal_id)
+  );
+}
+
 // Snapshot one leg for the audit trail: everything needed to reconstruct it by hand
 // if a conversion ever has to be reversed (there is no automated undo yet).
 function legSnapshot(s) {
@@ -857,15 +875,14 @@ export async function runPhase6Pass(db, { fetched = null, now = new Date() } = {
   // The suggestion is goal-stack routing (current avalanche target), and the human
   // decides; recorded in influx_allocations (influx_index 0, kind 'windfall') so it
   // is never re-flagged.
-  const windfalls = items.filter(
-    (t) =>
-      t.type === 'deposit' &&
-      !t.tags.some((x) => x.startsWith('income-source:')) &&
-      !['Transfer', 'Refunds'].includes(t.category) &&
-      parseAmount(t.amount) !== null &&
-      parseAmount(t.amount) >= PLAN.influxMinAmount &&
-      t.date >= PLAN.startDate &&
-      !seen.has(t.journal_id)
+  const liabilityIdSet = new Set(liabilities.map((l) => String(l.id)));
+  const windfalls = items.filter((t) =>
+    isWindfallCandidate(t, {
+      liabilityIds: liabilityIdSet,
+      minAmount: PLAN.influxMinAmount,
+      startDate: PLAN.startDate,
+      seenJournalIds: seen,
+    })
   );
   for (const dep of windfalls) {
     const amount = parseAmount(dep.amount);
