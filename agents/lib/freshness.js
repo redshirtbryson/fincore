@@ -106,6 +106,31 @@ export function assessFreshness(feeds = [], { now, defaultThresholdDays = 5 } = 
   return { fresh, stale, flags };
 }
 
+// Parse per-account threshold overrides from an env-style string, e.g.
+// "3=35,12=14" meaning Firefly account id 3 is judged at 35 days, id 12 at 14.
+// Exists for dormant-by-design accounts (2026-07-29: Huntington Savings is the
+// tax vault; its only organic transaction is the ~monthly interest posting, so
+// the default 7d threshold false-alarms it for three weeks of every month).
+// Malformed entries are skipped and reported as errors, never thrown: a config
+// typo must not kill the freshness pass, but it must not pass silently either.
+export function parseThresholdOverrides(raw) {
+  const overrides = new Map();
+  const errors = [];
+  if (typeof raw !== 'string' || raw.trim() === '') return { overrides, errors };
+  for (const entry of raw.split(',')) {
+    const trimmed = entry.trim();
+    if (trimmed === '') continue;
+    const m = /^([^=\s]+)\s*=\s*(\d+)$/.exec(trimmed);
+    const days = m ? Number(m[2]) : NaN;
+    if (!m || !Number.isFinite(days) || days <= 0) {
+      errors.push(`unusable freshness override "${trimmed}" (want accountId=days, days > 0); ignored`);
+      continue;
+    }
+    overrides.set(m[1], days);
+  }
+  return { overrides, errors };
+}
+
 // Render a single one-line summary of stale feeds for a notification, or '' when
 // nothing is stale. Order is deterministic: alphabetical by feed name. A
 // never-seen feed reads 'name (never seen)', a stale one 'name (8d)'.

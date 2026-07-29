@@ -3,7 +3,7 @@
 // try/caught (skip-and-report); math lives in the engines.
 import * as firefly from './firefly.js';
 import { matchTransfers, matchReimbursements, parseAmount, isInternalTransferDescription } from './matching.js';
-import { assessFreshness, staleSummaryLine } from './freshness.js';
+import { assessFreshness, staleSummaryLine, parseThresholdOverrides } from './freshness.js';
 import { reconcileNetWorth, reconcilePaystubDeposits } from './reconcile.js';
 import {
   audit,
@@ -598,6 +598,7 @@ export async function runFreshnessPass(db, { now = new Date() } = {}) {
   // must not alarm as stale forever just because their only entry is an opening
   // balance. With no map seeded, freshness has nothing to judge, which is correct:
   // freshness is meaningless without knowing which accounts have a live feed.
+  const thresholdOverrides = parseThresholdOverrides(process.env.FRESHNESS_THRESHOLD_OVERRIDES);
   const feedIds = new Set([...getSyncAccountMap(db, { mode: 'txn' }).values()].map((m) => String(m.fireflyAccountId)));
   const accounts = (await firefly.getAccounts('asset')).filter(
     (a) => a.active !== false && feedIds.has(String(a.id))
@@ -615,7 +616,11 @@ export async function runFreshnessPass(db, { now = new Date() } = {}) {
       // bank feed acquires transactions on its first import, so a feed that dies
       // later still ages out through the threshold.
       if (results[i].value === null) return;
-      feeds.push({ name: key, lastActivity: results[i].value });
+      const feed = { name: key, lastActivity: results[i].value };
+      if (thresholdOverrides.overrides.has(String(a.id))) {
+        feed.thresholdDays = thresholdOverrides.overrides.get(String(a.id));
+      }
+      feeds.push(feed);
     } else {
       fetchFailed.push({ name: key, reason: results[i].reason?.message || 'fetch failed' });
     }
@@ -640,7 +645,11 @@ export async function runFreshnessPass(db, { now = new Date() } = {}) {
     if (!currentKeys.has(feed)) stmt.run(feed);
   }
 
-  return { assessment, line: staleSummaryLine(assessment), flags: assessment.flags };
+  return {
+    assessment,
+    line: staleSummaryLine(assessment),
+    flags: [...assessment.flags, ...thresholdOverrides.errors],
+  };
 }
 
 // SimpleFIN balance oracle (SPEC 19 as amended): daily balance snapshots for

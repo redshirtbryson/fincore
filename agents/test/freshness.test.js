@@ -1,7 +1,7 @@
 // Money-grade tests for the feed freshness engine.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessFreshness, staleSummaryLine } from '../lib/freshness.js';
+import { assessFreshness, staleSummaryLine, parseThresholdOverrides } from '../lib/freshness.js';
 
 const now = new Date('2026-07-12T12:00:00Z');
 
@@ -105,4 +105,49 @@ test('the summary line lists stale feeds in alphabetical order with day counts a
     { now }
   );
   assert.equal(staleSummaryLine(r), 'STALE FEEDS: chase-checking (8d), schwab-positions (never seen)');
+});
+
+// parseThresholdOverrides
+
+test('overrides parse accountId=days pairs with whitespace tolerance', () => {
+  const { overrides, errors } = parseThresholdOverrides(' 3=35 , 12 = 14 ');
+  assert.equal(overrides.get('3'), 35);
+  assert.equal(overrides.get('12'), 14);
+  assert.equal(errors.length, 0);
+});
+
+test('empty, unset, and blank-entry override strings yield no overrides and no errors', () => {
+  assert.equal(parseThresholdOverrides(undefined).overrides.size, 0);
+  assert.equal(parseThresholdOverrides('').overrides.size, 0);
+  const r = parseThresholdOverrides('3=35,,');
+  assert.equal(r.overrides.size, 1);
+  assert.equal(r.errors.length, 0);
+});
+
+test('malformed override entries are skipped with an error, valid siblings survive', () => {
+  const { overrides, errors } = parseThresholdOverrides('3=35,bogus,4=0,5=-2,6=abc');
+  assert.equal(overrides.size, 1);
+  assert.equal(overrides.get('3'), 35);
+  assert.equal(errors.length, 4);
+  for (const e of errors) assert.match(e, /ignored/);
+});
+
+test('a per-feed threshold override keeps a slow-cadence account fresh past the default', () => {
+  // The Huntington Savings case: 8 days since the monthly interest posting,
+  // default threshold 7 would flag it; a 35-day override must not.
+  const r = assessFreshness(
+    [{ name: 'bank:3:Huntington Bank - Savings', lastActivity: '2026-07-04', thresholdDays: 35 }],
+    { now, defaultThresholdDays: 7 }
+  );
+  assert.deepEqual(r.fresh, ['bank:3:Huntington Bank - Savings']);
+  assert.equal(r.stale.length, 0);
+});
+
+test('an overridden account still ages out past its own threshold', () => {
+  const r = assessFreshness(
+    [{ name: 'bank:3:Huntington Bank - Savings', lastActivity: '2026-06-01', thresholdDays: 35 }],
+    { now, defaultThresholdDays: 7 }
+  );
+  assert.equal(r.stale.length, 1);
+  assert.match(r.stale[0].reason, /41d since last activity exceeds 35d threshold/);
 });
