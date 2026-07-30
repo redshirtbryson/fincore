@@ -17,6 +17,9 @@ import {
   latestPaystub,
   touchFeed,
   BASELINE_CORRECTION_DAYS,
+  recordInfluxAllocation,
+  planInfluxCount,
+  influxDates,
 } from '../lib/store.js';
 
 function memStore() {
@@ -207,4 +210,26 @@ test('schema constraints reject junk where it matters', () => {
   assert.throws(() =>
     db.prepare("INSERT INTO obligations (name, kind, monthly_amount) VALUES ('x', 'misc', 10)").run()
   );
+});
+
+// planInfluxCount / influxDates: windfall rows (influx_index 0) are not influxes
+
+test('windfall rows do not advance the plan influx schedule or the drought clock', () => {
+  const db = memStore();
+  const base = { depositAmount: 1000, tranches: [{ destination: 'x', amount: 1000 }] };
+  // Pre-plan seeded history.
+  recordInfluxAllocation(db, { ...base, depositDate: '2026-06-11', influxIndex: 5, status: 'historical' });
+  // Two windfalls (the 07-20 crypto sale and a false-positive), influx_index 0.
+  recordInfluxAllocation(db, { ...base, depositDate: '2026-07-20', influxIndex: 0 });
+  recordInfluxAllocation(db, { ...base, depositDate: '2026-07-23', influxIndex: 0 });
+
+  // No plan influx yet: the next real deposit must be #1, not #3.
+  assert.equal(planInfluxCount(db), 0);
+  // The drought clock sees only real Redshirt deposits: last one 06-11.
+  assert.deepEqual(influxDates(db), ['2026-06-11']);
+
+  // A real plan influx counts in both.
+  recordInfluxAllocation(db, { ...base, depositDate: '2026-08-04', influxIndex: 1 });
+  assert.equal(planInfluxCount(db), 1);
+  assert.deepEqual(influxDates(db), ['2026-06-11', '2026-08-04']);
 });

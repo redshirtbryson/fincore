@@ -628,14 +628,19 @@ export function seenInfluxJournalIds(db) {
 }
 
 // Count of PLAN influxes (excludes 'historical' pre-plan rows): the influx index
-// drives the boost schedule, so it starts at the plan, not at January.
+// drives the boost schedule, so it starts at the plan, not at January. Windfall
+// rows live in this table with influx_index 0 and must not advance the schedule
+// (2026-07-30: two windfall rows had silently pushed the next real influx to #3,
+// which would have allocated 70% strike instead of #1's 50%).
 export function planInfluxCount(db) {
-  return db.prepare(`SELECT COUNT(*) n FROM influx_allocations WHERE status != 'historical'`).get().n;
+  return db.prepare(`SELECT COUNT(*) n FROM influx_allocations WHERE status != 'historical' AND influx_index > 0`).get().n;
 }
 
 // All influx deposit dates (historical + plan) for the cadence/drought math.
+// Windfalls (influx_index 0) are excluded: a crypto-sale deposit is not Redshirt
+// cadence, and counting one had muted the drought watcher mid-drought.
 export function influxDates(db) {
-  return db.prepare('SELECT deposit_date FROM influx_allocations ORDER BY deposit_date').all().map((r) => r.deposit_date);
+  return db.prepare('SELECT deposit_date FROM influx_allocations WHERE influx_index > 0 ORDER BY deposit_date').all().map((r) => r.deposit_date);
 }
 
 export function recordInfluxAllocation(db, { depositDate, depositAmount, fireflyTxId = null, fireflyJournalId = null, influxIndex, tranches, status = 'notified', actor = 'deposit-watcher' }) {
