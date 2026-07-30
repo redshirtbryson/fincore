@@ -8,7 +8,13 @@ import { tidyMoney } from './format.js';
 let restClient = null;
 function rest() {
   if (!restClient) {
-    restClient = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
+    // retries: 0 — the library's default (3) re-POSTs after a response timeout even
+    // when the first request actually landed, which double-posts the message
+    // (observed 2026-07-30: two identical heartbeats at 7:01). These sends are
+    // informational and the off-host dead-man ping covers "did the run happen",
+    // so a rare dropped message is the better failure mode than duplicates.
+    // The longer timeout absorbs the slow-response case that triggered the retry.
+    restClient = new REST({ version: '10', retries: 0, timeout: 30_000 }).setToken(process.env.DISCORD_BOT_TOKEN);
   }
   return restClient;
 }
