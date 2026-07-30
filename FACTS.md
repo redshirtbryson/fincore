@@ -121,6 +121,11 @@ assessment/deed document is in hand.)
   net-worth-accurate.
 - Roth 401k option exists in the plan (deferrals may be designated Roth).
 - 2026 employee limit: $24,500 (under 50).
+- VERIFY (2026-07-30, from the 07-30 paystub): YTD employer match reads $831.00
+  against $1,500.00 of YTD deferrals at pay-week 30, with $0.00 match in the
+  current period. Per-check crediting of the formula would read ~$1,500. Likely
+  arrears/true-up cadence, but confirm with Empower/payroll when switching the
+  deferral to a percentage (ACTION above).
 
 ## Insurance (non-health) & estate
 
