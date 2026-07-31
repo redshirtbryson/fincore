@@ -217,8 +217,10 @@ test('schema constraints reject junk where it matters', () => {
 test('windfall rows do not advance the plan influx schedule or the drought clock', () => {
   const db = memStore();
   const base = { depositAmount: 1000, tranches: [{ destination: 'x', amount: 1000 }] };
-  // Pre-plan seeded history.
-  recordInfluxAllocation(db, { ...base, depositDate: '2026-06-11', influxIndex: 5, status: 'historical' });
+  // Pre-plan seeded history: seed-phase6 stores these as influx_index 0 +
+  // status 'historical' — the same index windfalls use, which is exactly why
+  // influxDates must discriminate on status, not index alone.
+  recordInfluxAllocation(db, { ...base, depositDate: '2026-06-11', influxIndex: 0, status: 'historical' });
   // Two windfalls (the 07-20 crypto sale and a false-positive), influx_index 0.
   recordInfluxAllocation(db, { ...base, depositDate: '2026-07-20', influxIndex: 0 });
   recordInfluxAllocation(db, { ...base, depositDate: '2026-07-23', influxIndex: 0 });

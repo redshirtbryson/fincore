@@ -637,10 +637,17 @@ export function planInfluxCount(db) {
 }
 
 // All influx deposit dates (historical + plan) for the cadence/drought math.
-// Windfalls (influx_index 0) are excluded: a crypto-sale deposit is not Redshirt
-// cadence, and counting one had muted the drought watcher mid-drought.
+// Windfalls are excluded: a crypto-sale deposit is not Redshirt cadence, and
+// counting one had muted the drought watcher mid-drought (2026-07-23..30).
+// Discrimination needs BOTH columns: seed-phase6 stored the pre-plan history as
+// influx_index 0 + status 'historical', windfalls are influx_index 0 + a live
+// status, and plan influxes are index >= 1 — a bare index > 0 filter silently
+// dropped the seeded cadence too (2026-07-31 regression of the first fix).
 export function influxDates(db) {
-  return db.prepare('SELECT deposit_date FROM influx_allocations WHERE influx_index > 0 ORDER BY deposit_date').all().map((r) => r.deposit_date);
+  return db
+    .prepare("SELECT deposit_date FROM influx_allocations WHERE influx_index > 0 OR status = 'historical' ORDER BY deposit_date")
+    .all()
+    .map((r) => r.deposit_date);
 }
 
 export function recordInfluxAllocation(db, { depositDate, depositAmount, fireflyTxId = null, fireflyJournalId = null, influxIndex, tranches, status = 'notified', actor = 'deposit-watcher' }) {
