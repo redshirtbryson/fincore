@@ -208,15 +208,28 @@ export async function getAccountDetail(id) {
     currentBalance: at.current_balance === undefined || at.current_balance === null || at.current_balance === '' ? null : Number(at.current_balance),
     openingBalance: at.opening_balance === undefined || at.opening_balance === null || at.opening_balance === '' ? null : Number(at.opening_balance),
     openingBalanceDate: (at.opening_balance_date || '').slice(0, 10) || null,
+    // Liability metadata, echoed back on update: Firefly's account PUT crashes with
+    // "Undefined array key liability_direction" (500) when a liability is updated
+    // without these fields (first hit 2026-08-03, the first day truing ever wrote).
+    liabilityType: at.liability_type ?? null,
+    liabilityDirection: at.liability_direction ?? null,
+    interest: at.interest ?? null,
+    interestPeriod: at.interest_period ?? null,
   };
 }
 
 // Set an account's opening balance (the loan balance-truing write). Firefly's
-// account PUT requires the name; the opening date is preserved. Read-back verified:
-// a 200 is weaker evidence than the stored value for a money-grade write.
-export async function setOpeningBalance(id, { openingBalance, openingBalanceDate, name }) {
+// account PUT requires the name; the opening date is preserved. Liability fields
+// are echoed back verbatim because their absence 500s the PUT on liability
+// accounts (see getAccountDetail). Read-back verified: a 200 is weaker evidence
+// than the stored value for a money-grade write.
+export async function setOpeningBalance(id, { openingBalance, openingBalanceDate, name, liabilityType = null, liabilityDirection = null, interest = null, interestPeriod = null }) {
   const body = { name, opening_balance: String(openingBalance) };
   if (openingBalanceDate) body.opening_balance_date = openingBalanceDate;
+  if (liabilityType) body.liability_type = liabilityType;
+  if (liabilityDirection) body.liability_direction = liabilityDirection;
+  if (interest !== null && interest !== '') body.interest = String(interest);
+  if (interestPeriod) body.interest_period = interestPeriod;
   const res = await api(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) });
   const after = await getAccountDetail(id);
   if (after.openingBalance === null || Math.round(after.openingBalance * 100) !== Math.round(Number(openingBalance) * 100)) {

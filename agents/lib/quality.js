@@ -1034,6 +1034,10 @@ export async function runLoanBalancePass(db) {
         openingBalance: verdict.openingNew,
         openingBalanceDate: detail.openingBalanceDate,
         name: detail.name,
+        liabilityType: detail.liabilityType,
+        liabilityDirection: detail.liabilityDirection,
+        interest: detail.interest,
+        interestPeriod: detail.interestPeriod,
       });
       audit(db, {
         actor: 'loan-truing',
